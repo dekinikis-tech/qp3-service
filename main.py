@@ -10,28 +10,30 @@ SOURCES = [
 ]
 
 def check_vless_tls(config):
+    if "[openRay]" in config: return None
     try:
-        # Убираем [openRay] сразу, чтобы не тратить время
-        if "[openRay]" in config:
-            return None
-
         parsed = urllib.parse.urlparse(config)
-        host = parsed.hostname
-        port = parsed.port
+        host, port = parsed.hostname, parsed.port
         if not host or not port: return None
         
         params = urllib.parse.parse_qs(parsed.query)
-        sni = params.get('sni', [None]) or params.get('peer', [None]) or "://google.com"
+        # Извлекаем SNI, если нет - ставим дефолт
+        sni = params.get('sni', [None])[0] or params.get('peer', [None])[0] or "://google.com"
         
-        context = ssl._create_unverified_context()
+        # СОЗДАЕМ ГИБКИЙ SSL-КОНТЕКСТ
+        context = ssl.create_default_context()
+        context.check_hostname = False
+        context.verify_mode = ssl.CERT_NONE
+        # Добавляем ALPN, так как многие Reality серверы без него сбрасывают связь
+        context.set_alpn_protocols(['h2', 'http/1.1'])
+        
         start = time.time()
-        
-        # Таймаут 3 секунды, чтобы прогрузить сервера с пингом до 800мс
-        with socket.create_connection((host, port), timeout=3.0) as sock:
-            with context.wrap_socket(sock, server_hostname=sni if isinstance(sni, list) else sni) as ssock:
+        with socket.create_connection((host, port), timeout=3.5) as sock:
+            # Выполняем само TLS-рукопожатие
+            with context.wrap_socket(sock, server_hostname=sni) as ssock:
                 ping = int((time.time() - start) * 1000)
                 
-                # ТВОЙ НОВЫЙ ДИАПАЗОН: от 1 до 800мс
+                # Твой диапазон 1-800мс
                 if 1 <= ping <= 800:
                     return {"config": config, "ping": ping}
     except:
@@ -39,7 +41,7 @@ def check_vless_tls(config):
     return None
 
 def run():
-    print("--- ПОИСК В ДИАПАЗОНЕ 1-800 MS (БЕЗ OPENRAY) ---")
+    print("--- ГЛУБОКИЙ ТЕСТ TLS (1-800 MS, БЕЗ OPENRAY) ---")
     raw_data = []
     for url in SOURCES:
         try:
@@ -48,31 +50,28 @@ def run():
         except: continue
 
     unique = list(set([c.strip() for c in raw_data if len(c) > 100]))
-    results = []
+    print(f"Загружено: {len(unique)} ссылок. Проверяю...")
 
-    # 100 потоков, так как диапазон широкий и нужно проверить много ссылок
+    results = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=100) as executor:
         futures = {executor.submit(check_vless_tls, c): c for c in unique}
         for future in concurrent.futures.as_completed(futures):
             res = future.result()
-            if res: 
-                results.append(res)
+            if res: results.append(res)
 
-    # Сортируем: сначала самые быстрые
     results.sort(key=lambda x: x['ping'])
-    print(f"Всего найдено подходящих: {len(results)}")
+    print(f"Найдено живых (TLS OK): {len(results)}")
 
     if results:
-        # Берем ТОП-50
         final_list = [item['config'] for item in results[:50]]
         with open(FILE_NAME, "w", encoding="utf-8") as f:
             f.write("\n".join(final_list))
             
         if GID:
             subprocess.run(f'gh gist edit {GID} -f "{FILE_NAME}" {FILE_NAME}', shell=True)
-            print("Gist обновлен!")
+            print("Успех! Gist обновлен.")
     else:
-        print("Ничего не найдено.")
+        print("0 серверов прошли TLS. Проверь SNI или источники.")
 
 if __name__ == "__main__":
     run()
