@@ -1,53 +1,77 @@
-import requests, os, re, subprocess
+import requests, os, socket, re, time, subprocess, concurrent.futures, ssl, urllib.parse
 
 GID = os.environ.get('MY_GIST_ID')
 FILE_NAME = "vps.txt"
 
-# Источники, которые специализируются на обходе блокировок в РФ
+# Источники, где больше REALITY (самое живучее)
 SOURCES = [
     "https://github.com/AvenCores/goida-vpn-configs/raw/refs/heads/main/githubmirror/26.txt",
     "https://github.com/AvenCores/goida-vpn-configs/raw/refs/heads/main/githubmirror/1.txt",
-    "https://github.com/AvenCores/goida-vpn-configs/raw/refs/heads/main/githubmirror/6.txt" # Специальный RU-источник
+    "https://github.com/AvenCores/goida-vpn-configs/raw/refs/heads/main/githubmirror/6.txt"
 ]
 
-def run():
-    print("--- ФОРМИРОВАНИЕ ПРЯМОГО СПИСКА (RU-STABLE) ---")
-    raw_data = []
-    
-    # Ключевые слова из твоих рабочих ссылок
-    target_marks = ['reality', 'xtls-rprx-vision', 'grpc', 'workers.dev']
-    ru_sni = ['vk.com', 'rutube', 'perekrestok', 'x5.ru', 'yandex', 'ozon']
+def check_vless_tls(config):
+    """Полноценная проверка TLS-рукопожатия для Reality/VLESS"""
+    try:
+        # Парсим конфиг
+        parsed = urllib.parse.urlparse(config)
+        host = parsed.hostname
+        port = parsed.port
+        params = urllib.parse.parse_qs(parsed.query)
+        
+        # SNI (Server Name Indication) - крайне важен для обхода блоков
+        sni = params.get('sni', [None])[0] or params.get('peer', [None])[0] or "google.com"
+        
+        if not host or not port: return None
 
+        # Создаем SSL контекст, который игнорирует проверку сертификата (для Reality это норма)
+        context = ssl._create_unverified_context()
+        
+        start = time.time()
+        # 1. TCP коннект
+        with socket.create_connection((host, port), timeout=3) as sock:
+            # 2. TLS коннект (имитируем рукопожатие)
+            with context.wrap_socket(sock, server_hostname=sni) as ssock:
+                ping = int((time.time() - start) * 1000)
+                return {"config": config, "ping": ping}
+    except:
+        return None
+
+def run():
+    print("--- ГЛУБОКАЯ ПРОВЕРКА TLS HANDSHAKE ---")
+    raw_data = []
     for url in SOURCES:
         try:
-            res = requests.get(url, timeout=15).text
-            # Вытаскиваем все VLESS
-            links = re.findall(r'vless://[^\s\'"<>]+', res)
-            
-            for link in links:
-                link_low = link.lower()
-                # ФИЛЬТР: Берем только то, что реально имеет шансы в РФ
-                # Должен быть современный протокол И (RU-маскировка ИЛИ Cloudflare)
-                is_modern = any(m in link_low for m in target_marks)
-                is_adapted = any(s in link_low for s in ru_sni) or 'workers.dev' in link_low
-                
-                if is_modern and is_adapted and len(link) > 150:
-                    raw_data.append(link.strip())
+            res = requests.get(url, timeout=10).text
+            # Собираем только VLESS (Shadowsocks сейчас бесполезен)
+            raw_data.extend(re.findall(r'vless://[^\s\'"<>]+', res))
         except: continue
 
-    # Убираем дубликаты и берем последние 50 (самые свежие из файлов)
-    unique_links = list(dict.fromkeys(raw_data)) # Сохраняем порядок
-    final_list = unique_links[-50:] 
+    unique = list(set([c.strip() for c in raw_data if len(c) > 100]))
+    print(f"Загружено {len(unique)} потенциальных ключей. Начинаю тест...")
 
-    if final_list:
-        print(f"Найдено {len(final_list)} потенциально 'бетонных' серверов.")
+    results = []
+    # 50 потоков достаточно для глубокой проверки
+    with concurrent.futures.ThreadPoolExecutor(max_workers=50) as executor:
+        futures = {executor.submit(check_vless_tls, c): c for c in unique}
+        for future in concurrent.futures.as_completed(futures):
+            res = future.result()
+            if res:
+                results.append(res)
+                print(f"Пройден TLS Handshake: {len(results)}")
+
+    results.sort(key=lambda x: x['ping'])
+
+    if results:
+        final_list = [item['config'] for item in results[:30]]
         with open(FILE_NAME, "w", encoding="utf-8") as f:
             f.write("\n".join(final_list))
             
-        subprocess.run(f'gh gist edit {GID} -f "{FILE_NAME}" {FILE_NAME}', shell=True)
-        print("УСПЕХ! Gist обновлен свежими RU-адаптированными ссылками.")
+        if GID:
+            subprocess.run(f'gh gist edit {GID} -f "{FILE_NAME}" {FILE_NAME}', shell=True)
+            print("УСПЕХ: Gist обновлен проверенными ключами.")
     else:
-        print("Подходящих ссылок не найдено.")
+        print("Ни один сервер не прошел проверку TLS. Возможно, пора обновить источники.")
 
 if __name__ == "__main__":
     run()
