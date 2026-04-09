@@ -58,7 +58,7 @@ def run():
 
     if results:
         # Берем ТОП-50 самых быстрых
-        final_list = [item['config'] for item in results[:50]]
+        final_list = [item['config'] for item in results[:200]]
         with open(FILE_NAME, "w", encoding="utf-8") as f:
             f.write("\n".join(final_list))
             
