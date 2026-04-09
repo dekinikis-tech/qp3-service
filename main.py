@@ -8,11 +8,9 @@ SOURCES = [
     "https://github.com/AvenCores/goida-vpn-configs/raw/refs/heads/main/githubmirror/6.txt"
 ]
 
-def check_is_proxy_alive(config):
-    """
-    Глубокая проверка: TCP коннект + попытка получить ответ протокола
-    """
+def check_honest_proxy(config):
     try:
+        # Приоритет Reality/TLS/Vision (самые живучие в РФ)
         is_modern = any(x in config.lower() for x in ['reality', 'tls', 'security=vless', 'flow=xtls'])
         match = re.search(r'@([^:/#\s]+):(\d+)', config)
         if not match: return None
@@ -20,32 +18,31 @@ def check_is_proxy_alive(config):
         host, port = match.group(1), int(match.group(2))
         
         start = time.time()
-        # 1. Базовый коннект
-        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        s.settimeout(1.0)
-        s.connect((host, port))
-        
-        # 2. Пытаемся отправить "мусорный" HTTP запрос. 
-        # Рабочие Xray/V2ray сервера часто настроены отвечать на некорректные данные мгновенно (fallback),
-        # а заблокированные или мертвые порты просто "проглотят" байты или будут висеть.
-        s.send(b"GET / HTTP/1.1\r\n\r\n")
-        
-        # Пытаемся считать хоть 1 байт ответа
-        response = s.recv(1)
-        s.close()
-        
-        ping = int((time.time() - start) * 1000)
-        
-        # Очень жесткие критерии для РФ:
-        if not is_modern and ping > 300: return None # Простые vless выше 300мс - мусор
-        if is_modern and ping > 800: return None
-        
-        return {"config": config, "ping": ping, "modern": is_modern}
+        # ШАГ 1: Быстрый TCP коннект
+        with socket.create_connection((host, port), timeout=1.2):
+            ping = int((time.time() - start) * 1000)
+            
+            # ТВОЕ УСЛОВИЕ: От 50мс до 600мс
+            if ping < 50 or ping > 600:
+                return None
+            
+            # ШАГ 2: Глубокая проверка (ждем ответ от протокола)
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.settimeout(1.2)
+            s.connect((host, port))
+            # Отправляем "приветственный" байт
+            s.send(b"\x16\x03\x01\x00\x00") 
+            response = s.recv(1)
+            s.close()
+            
+            if not response: return None
+            
+            return {"config": config, "ping": ping, "modern": is_modern}
     except:
         return None
 
 def run():
-    print("--- ГЛУБОКАЯ ПРОВЕРКА ДАННЫХ ---")
+    print("--- ФИЛЬТРАЦИЯ: ЗОНА 50-600мс ---")
     raw_data = []
     for url in SOURCES:
         try:
@@ -57,28 +54,28 @@ def run():
     print(f"Всего ключей: {len(unique)}")
 
     results = []
-    # Проверяем всю базу в 100 потоков
-    with concurrent.futures.ThreadPoolExecutor(max_workers=100) as executor:
-        futures = {executor.submit(check_is_proxy_alive, c): c for c in unique}
+    # 120 потоков для скорости
+    with concurrent.futures.ThreadPoolExecutor(max_workers=120) as executor:
+        futures = {executor.submit(check_honest_proxy, c): c for c in unique}
         for future in concurrent.futures.as_completed(futures):
             res = future.result()
             if res: results.append(res)
     
-    # Сортировка: Modern (Reality/TLS) всегда в топе, затем по пингу
+    # Сортировка: сначала защищенные (Reality), потом самые быстрые из честных
     results.sort(key=lambda x: (not x['modern'], x['ping']))
 
     if results:
-        # Выгружаем ТОП-30. Если их мало - значит это реально работающие.
-        final_list = [item['config'] for item in results[:30]]
+        # Выгружаем ТОП-40 самых качественных
+        final_list = [item['config'] for item in results[:40]]
         
         with open(FILE_NAME, "w", encoding="utf-8") as f:
             f.write("\n".join(final_list))
             
         cmd = f'gh gist edit {GID} -f "{FILE_NAME}" {FILE_NAME}'
         subprocess.run(cmd, shell=True, capture_output=True, text=True)
-        print(f"УСПЕХ! Найдено {len(results)} потенциально рабочих. В Gist ушло ТОП-30.")
+        print(f"УСПЕХ! Найдено {len(results)} честных серверов. В Gist ушло ТОП-40.")
     else:
-        print("Рабочих серверов не найдено.")
+        print("Честных серверов в диапазоне 50-600мс не найдено.")
 
 if __name__ == "__main__":
     run()
