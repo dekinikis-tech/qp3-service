@@ -1,9 +1,8 @@
 import requests
 import os
 import socket
-from urllib.parse import urlparse
+import re
 
-# Ссылки на источники
 SOURCES = [
     "https://github.com",
     "https://github.com",
@@ -12,48 +11,69 @@ SOURCES = [
 
 def check_server(config):
     try:
-        # Извлекаем адрес и порт для базовой проверки
-        content = config.split('@')[-1].split('?')[0]
-        host_port = content.split(':')
-        host = host_port[0]
-        port = int(host_port[1].split('#')[0])
+        # Улучшенный поиск хоста и порта
+        match = re.search(r'@([^:/]+):(\d+)', config)
+        if not match:
+            # Для Shadowsocks старого типа
+            match = re.search(r'ss://[^@]+@([^:/]+):(\d+)', config)
         
-        # Пробуем подключиться (таймаут 2 секунды)
-        with socket.create_connection((host, port), timeout=2):
-            return True
+        if match:
+            host = match.group(1)
+            port = int(match.group(2))
+            with socket.create_connection((host, port), timeout=1):
+                return True
     except:
-        return False
+        pass
+    return False
 
 def run():
     all_configs = []
-    print("Скачиваю серверы...")
+    print("Загрузка источников...")
     for url in SOURCES:
         try:
-            res = requests.get(url, timeout=10).text
-            all_configs.extend(res.splitlines())
-        except: continue
+            res = requests.get(url, timeout=15).text
+            # Ищем всё, что похоже на vless://, vmess:// или ss://
+            found = re.findall(r'(?:vless|vmess|ss)://[^\s]+', res)
+            all_configs.extend(found)
+        except Exception as e:
+            print(f"Ошибка загрузки {url}: {e}")
 
-    unique_configs = list(set([c.strip() for c in all_configs if c.strip()]))
-    print(f"Всего найдено: {len(unique_configs)}. Начинаю проверку...")
+    unique_configs = list(set([c.strip() for c in all_configs]))
+    print(f"Найдено уникальных ключей: {len(unique_configs)}")
     
-    # Ограничим проверку первыми 500 для скорости на GitHub, или уберите срез [:500]
-    working_configs = [c for c in unique_configs if check_server(c)]
+    # Проверяем первые 300 для теста, чтобы не ждать долго
+    working_configs = []
+    for c in unique_configs[:300]:
+        if check_server(c):
+            working_configs.append(c)
     
+    print(f"Рабочих серверов найдено: {len(working_configs)}")
+
+    if not working_configs:
+        print("Рабочих серверов не найдено, Gist не обновлен.")
+        return
+
     gist_id = os.environ['GIST_ID']
     token = os.environ['GIST_TOKEN']
     
     content = "\n".join(working_configs)
+    headers = {"Authorization": f"token {token}"}
     
-    headers = {"Authorization": f"token {token}", "Accept": "application/vnd.github.v3+json"}
-    # Название файла в Gist должно совпадать с тем, что у вас там уже есть
-    data = {"files": {"all-vpn.txt": {"content": content}}}
-    
-    response = requests.patch(f"https://github.com{gist_id}", headers=headers, json=data)
-    
-    if response.status_code == 200:
-        print(f"Успех! В Gist отправлено {len(working_configs)} рабочих серверов.")
-    else:
-        print(f"Ошибка обновления Gist: {response.status_code}")
+    # Название файла ВНУТРИ вашего Gist (должно быть точным)
+    # По вашей ссылке файл называется '635b44b708e61127ccb3c672316590e5' или по умолчанию
+    # Попробуем обновить первый доступный файл в этом Gist
+    try:
+        gist_data = requests.get(f"https://github.com{gist_id}", headers=headers).json()
+        filename = list(gist_data['files'].keys())[0]
+        
+        data = {"files": {filename: {"content": content}}}
+        res = requests.patch(f"https://github.com{gist_id}", headers=headers, json=data)
+        if res.status_code == 200:
+            print("Gist успешно обновлен!")
+        else:
+            print(f"Ошибка API: {res.status_code} - {res.text}")
+    except Exception as e:
+        print(f"Ошибка при связи с Gist: {e}")
 
 if __name__ == "__main__":
     run()
