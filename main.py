@@ -11,10 +11,9 @@ SOURCES = [
 
 def check_server(config):
     try:
-        # Ищем хост и порт в разных форматах ссылок
+        # Улучшенный поиск хоста и порта
         match = re.search(r'@([^:/#\s]+):(\d+)', config)
         if not match:
-            # Для Shadowsocks без @
             match = re.search(r'ss://[a-zA-Z0-9+/=]+@([^:/#\s]+):(\d+)', config)
             
         if match:
@@ -27,55 +26,60 @@ def check_server(config):
     return False
 
 def run():
-    gist_id = os.environ['GIST_ID']
-    token = os.environ['GIST_TOKEN']
+    gist_id = os.environ.get('GIST_ID')
+    token = os.environ.get('GIST_TOKEN')
     headers = {"Authorization": f"token {token}", "Accept": "application/vnd.github.v3+json"}
 
-    # 1. Получаем список файлов из Gist, чтобы знать, что обновлять
-    print("Получаю инфо о Gist...")
+    print("--- Начинаю работу ---")
+    
+    # 1. Проверяем связь с Gist
     g_res = requests.get(f"https://github.com{gist_id}", headers=headers).json()
     if 'files' not in g_res:
-        print("Ошибка: не удалось найти файлы в Gist. Проверьте GIST_ID.")
+        print(f"Ошибка доступа к Gist: {g_res}")
         return
     
-    # Берем имя первого файла в Gist (у вас это vps.txt)
-    target_filename = list(g_res['files'].keys())[0]
-    print(f"Буду обновлять файл: {target_filename}")
+    # Берем имя первого файла в Gist
+    file_names = list(g_res['files'].keys())
+    target_filename = file_names[0] 
+    print(f"Целевой файл в Gist: {target_filename}")
 
     # 2. Собираем конфиги
     all_configs = []
     for url in SOURCES:
         try:
+            print(f"Загружаю: {url}")
             res = requests.get(url, timeout=15).text
             found = re.findall(r'(?:vless|vmess|ss)://[^\s]+', res)
             all_configs.extend(found)
-        except: continue
+        except Exception as e:
+            print(f"Ошибка загрузки {url}: {e}")
 
-    unique_configs = list(set([c.strip() for c in all_configs]))
-    print(f"Найдено ключей: {len(unique_configs)}")
+    unique_configs = list(set([c.strip() for c in all_configs if c.strip()]))
+    print(f"Найдено уникальных ключей: {len(unique_configs)}")
 
-    # 3. Проверка (берем первые 500 для стабильности)
+    # 3. Проверка (чекаем только первые 500 для теста)
     working_configs = []
     for c in unique_configs[:500]:
         if check_server(c):
             working_configs.append(c)
     
-    print(f"Рабочих: {len(working_configs)}")
+    print(f"Рабочих серверов после проверки: {len(working_configs)}")
 
     if not working_configs:
-        print("Рабочих нет, отмена.")
+        print("Рабочих серверов не найдено. Обновление отменено.")
         return
 
-    # 4. Отправка в Gist
+    # 4. Обновляем Gist
     content = "\n".join(working_configs)
     data = {"files": {target_filename: {"content": content}}}
     
-    final_res = requests.patch(f"https://github.com{gist_id}", headers=headers, json=data)
+    update_res = requests.patch(f"https://github.com{gist_id}", headers=headers, json=data)
     
-    if final_res.status_code == 200:
-        print("УРА! Gist успешно обновлен.")
+    if update_res.status_code == 200:
+        print("БИНГО! Список успешно обновлен в Gist.")
     else:
-        print(f"Ошибка API: {final_res.status_code}")
+        print(f"Ошибка при обновлении: {update_res.status_code}")
+        print(update_res.text)
 
 if __name__ == "__main__":
     run()
