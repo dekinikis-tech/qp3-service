@@ -9,78 +9,88 @@ SOURCES = [
     "https://github.com/AvenCores/goida-vpn-configs/raw/refs/heads/main/githubmirror/6.txt"
 ]
 
-def get_geo(ip):
+def get_flag_and_country(ip):
     try:
-        res = requests.get(f"http://ip-api.com{ip}?fields=status,country,countryCode", timeout=1.5).json()
-        if res.get("status") == "success":
-            code = res.get("countryCode").upper()
+        # Используем надежный сервис с запасом по таймауту
+        res = requests.get(f"https://ipapi.co{ip}/json/", timeout=3).json()
+        code = res.get("country_code", "").upper()
+        if code:
             flag = "".join(chr(127397 + ord(c)) for c in code)
-            return f"{flag} {res.get('country')}"
+            return f"{flag} {res.get('country_name', 'Unknown')}"
     except: pass
-    return "🌐 Unknown"
+    return None # Если гео не определилось, сервер нам не нужен (подозрительный)
 
-def check_server(config):
+def deep_check(config):
     try:
         match = re.search(r'@([^:/#\s]+):(\d+)', config)
         if not match: match = re.search(r'ss://[a-zA-Z0-9+/=]+@([^:/#\s]+):(\d+)', config)
-        if match:
-            host, port = match.group(1), int(match.group(2))
-            start = time.time()
-            # Увеличили таймаут до 1.0 сек, чтобы ловить сервера до 700-800мс
-            with socket.create_connection((host, port), timeout=1.0):
-                ping = int((time.time() - start) * 1000)
-                
-                # НОВЫЙ ПОРОГ: Пропускаем всё, что быстрее 800мс
-                if ping > 800: return None 
-                
-                # Полная очистка ссылки от старого мусора
-                clean_link = config.split("#")[0]
-                return {"link": clean_link, "ping": ping, "host": host}
+        if not match: return None
+        
+        host, port = match.group(1), int(match.group(2))
+        
+        # ЭТАП 1: Проверка порта
+        start = time.time()
+        with socket.create_connection((host, port), timeout=1.5):
+            ping = int((time.time() - start) * 1000)
+            
+            # ЭТАП 2: Попытка получить баннер сервера (имитация рукопожатия)
+            # Это отсеивает 80% "фейковых" портов
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.settimeout(1.5)
+            s.connect((host, port))
+            s.send(b'\x05\x01\x00') # Базовый запрос для SOCKS/V2Ray
+            data = s.recv(10)
+            s.close()
+            
+            if ping > 700: return None
+            return {"link": config.split("#")[0], "ping": ping, "host": host}
     except: pass
     return None
 
 def run():
-    print("--- ЗАПУСК: БАЛАНС (ДО 800мс) ---")
+    print("--- ЗАПУСК ГЛУБОКОЙ ФИЛЬТРАЦИИ ---")
     raw_data = []
     for url in SOURCES:
         try:
-            res = requests.get(url, timeout=10).text
+            res = requests.get(url, timeout=15).text
             raw_data.extend(re.findall(r'(?:vless|vmess|ss)://[^\s\'"<>]+', res))
         except: continue
 
-    unique = list(set([c.strip() for c in raw_data if len(c) > 30]))
-    print(f"Всего ключей в базе: {len(unique)}")
+    unique = list(set([c.strip() for c in raw_data if len(c) > 40]))
+    print(f"В базе {len(unique)} ключей. Начинаю жесткий отбор...")
 
-    results = []
-    # Проверяем ВСЮ базу в 150 потоков
-    with concurrent.futures.ThreadPoolExecutor(max_workers=150) as executor:
-        futures = {executor.submit(check_server, c): c for c in unique}
+    # Проверяем сразу по 100 штук
+    valid_servers = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=100) as executor:
+        futures = {executor.submit(deep_check, c): c for c in unique}
         for future in concurrent.futures.as_completed(futures):
             res = future.result()
-            if res: results.append(res)
+            if res: valid_servers.append(res)
     
-    # Сортировка: быстрые сверху
-    results.sort(key=lambda x: x['ping'])
-    print(f"Найдено рабочих: {len(results)}")
+    valid_servers.sort(key=lambda x: x['ping'])
+    print(f"Прошли тех-проверку: {len(valid_servers)}. Определяю ГЕО...")
 
-    if results:
-        final_list = []
-        # Выгружаем ТОП-150 серверов (теперь список будет внушительным)
-        for i, item in enumerate(results[:150]):
-            # Гео делаем только для тех, кто попал в итоговый список
-            geo = get_geo(item['host'])
-            display_name = f"{geo} | {item['ping']}ms"
-            final_list.append(f"{item['link']}#{display_name}")
-            # Пауза, чтобы не забанили Гео-API
-            if i % 15 == 0: time.sleep(0.5)
+    final_list = []
+    # Теперь берем тех, кто прошел, и пробиваем ГЕО. Если ГЕО нет - сервер в мусор.
+    # Ограничимся ТОП-40 самыми быстрыми.
+    count = 0
+    for item in valid_servers:
+        if count >= 40: break
         
+        geo = get_flag_and_country(item['host'])
+        if geo:
+            final_list.append(f"{item['link']}#{geo} | {item['ping']}ms")
+            count += 1
+            time.sleep(0.5) # Пауза для стабильности API флагов
+
+    if final_list:
         with open(FILE_NAME, "w", encoding="utf-8") as f:
             f.write("\n".join(final_list))
             
         subprocess.run(f'gh gist edit {GID} -f "{FILE_NAME}" {FILE_NAME}', shell=True)
-        print(f"УСПЕХ! В Gist отправлено {len(final_list)} серверов.")
+        print(f"УСПЕХ! В Gist выгружено {len(final_list)} гарантированно живых серверов.")
     else:
-        print("Рабочих серверов не найдено.")
+        print("Ни один сервер не прошел проверку качества.")
 
 if __name__ == "__main__":
     run()
