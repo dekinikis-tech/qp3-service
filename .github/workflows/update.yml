@@ -13,8 +13,8 @@ jobs:
         with:
           python-version: '3.9'
       - run: pip install requests
-      - name: Run script
+      - name: Run script and update gist
         env:
+          GH_TOKEN: ${{ secrets.GIST_TOKEN }}
           MY_GIST_ID: ${{ secrets.MY_GIST_ID }}
-          GIST_TOKEN: ${{ secrets.GIST_TOKEN }}
         run: python main.py
