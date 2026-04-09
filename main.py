@@ -63,7 +63,7 @@ def run():
     results.sort(key=lambda x: x['ping'])
 
     if results:
-        final_list = [item['config'] for item in results[:30]]
+        final_list = [item['config'] for item in results[:50]]
         with open(FILE_NAME, "w", encoding="utf-8") as f:
             f.write("\n".join(final_list))
             
