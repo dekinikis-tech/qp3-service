@@ -4,9 +4,8 @@ GID = os.environ.get('MY_GIST_ID')
 FILE_NAME = "vps.txt"
 
 SOURCES = [
-    "https://github.com/AvenCores/goida-vpn-configs/raw/refs/heads/main/githubmirror/26.txt",
-    "https://github.com/AvenCores/goida-vpn-configs/raw/refs/heads/main/githubmirror/1.txt",
-    "https://github.com/AvenCores/goida-vpn-configs/raw/refs/heads/main/githubmirror/6.txt"
+   "https://github.com/AvenCores/goida-vpn-configs/raw/refs/heads/main/githubmirror/26.txt",
+"https://github.com/AvenCores/goida-vpn-configs/raw/refs/heads/main/githubmirror/6.txt"
 ]
 
 def check_vless_tls(config):
@@ -63,7 +62,7 @@ def run():
     print(f"Найдено живых (TLS OK): {len(results)}")
 
     if results:
-        final_list = [item['config'] for item in results[:50]]
+        final_list = [item['config'] for item in results[:200]]
         with open(FILE_NAME, "w", encoding="utf-8") as f:
             f.write("\n".join(final_list))
             
