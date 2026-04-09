@@ -3,36 +3,60 @@ import requests, os, socket, re, time, subprocess, json
 # --- НАСТРОЙКИ ---
 GID = os.environ.get('MY_GIST_ID')
 FILE_NAME = "vps.txt"
-
 SOURCES = [
-    "https://github.com/AvenCores/goida-vpn-configs/raw/refs/heads/main/githubmirror/26.txt",
-    "https://github.com/AvenCores/goida-vpn-configs/raw/refs/heads/main/githubmirror/1.txt",
-    "https://github.com/AvenCores/goida-vpn-configs/raw/refs/heads/main/githubmirror/6.txt"
+    "https://github.com",
+    "https://github.com",
+    "https://github.com"
 ]
 
-def get_flag(host):
-    # Простейший определитель флага по домену. 
-    # Для IP-адресов по умолчанию поставим 🌐, так как полная база весит много
-    flags = {"de": "🇩🇪", "us": "🇺🇸", "ru": "🇷🇺", "nl": "🇳🇱", "gb": "🇬🇧", "fi": "🇫🇮", "fr": "🇫🇷", "jp": "🇯🇵", "sg": "🇸🇬", "tr": "🇹🇷"}
-    ext = host.split('.')[-1].lower()
-    return flags.get(ext, "🌐")
+# Кэш для флагов, чтобы не стучаться в API слишком часто
+geo_cache = {}
+
+def get_geo_info(ip):
+    if ip in geo_cache: return geo_cache[ip]
+    try:
+        # Используем бесплатное API для определения страны
+        res = requests.get(f"http://ip-api.com{ip}?fields=status,countryCode", timeout=2).json()
+        if res.get("status") == "success":
+            code = res.get("countryCode").upper()
+            # Превращаем код страны в эмодзи флага
+            flag = "".join(chr(127397 + ord(c)) for c in code)
+            geo_cache[ip] = flag
+            return flag
+    except: pass
+    return "🌐"
 
 def check_server(config):
     try:
+        # Парсим хост, порт и оригинальное имя
         match = re.search(r'@([^:/#\s]+):(\d+)', config)
         if not match: match = re.search(r'ss://[a-zA-Z0-9+/=]+@([^:/#\s]+):(\d+)', config)
+        
         if match:
             host, port = match.group(1), int(match.group(2))
+            
+            # Извлекаем оригинальное имя сервера (после #)
+            original_name = ""
+            if "#" in config:
+                original_name = config.split("#")[-1]
+                # Чистим рекламу (ТГ каналы, ссылки)
+                original_name = re.sub(r'(@\w+|http\S+|www\S+)', '', original_name).strip()
+            
             start = time.time()
-            with socket.create_connection((host, port), timeout=1.0):
+            # Проверка порта
+            with socket.create_connection((host, port), timeout=1.5):
                 ping = int((time.time() - start) * 1000)
-                clean_conf = re.sub(r'#.*', '', config).strip()
-                return {"conf": clean_conf, "ping": ping, "host": host}
+                # Если пинг слишком большой, сервер скорее всего будет тормозить
+                if ping > 1000: return None
+                
+                flag = get_geo_info(host)
+                clean_conf = config.split("#")[0]
+                return {"conf": clean_conf, "ping": ping, "name": original_name, "flag": flag}
     except: pass
     return None
 
 def run():
-    print(f"--- ОБНОВЛЕНИЕ СПИСКА С ФЛАГАМИ ---")
+    print("--- ГЛУБОКАЯ ПРОВЕРКА И ГЕОЛОКАЦИЯ ---")
     all_configs = []
     for url in SOURCES:
         try:
@@ -41,10 +65,10 @@ def run():
         except: continue
 
     unique = list(set([c.strip() for c in all_configs if c.strip()]))
-    
     results = []
-    # Давай проверять 150 штук, чтобы список был посолиднее, но всё еще быстрым
-    for c in unique[:150]:
+    
+    # Проверяем 100 штук для качества (с гео-проверкой это дольше)
+    for c in unique[:100]:
         res = check_server(c)
         if res: results.append(res)
     
@@ -52,21 +76,19 @@ def run():
 
     if results:
         final_list = []
-        for i, item in enumerate(results):
-            flag = get_flag(item['host'])
-            # Формат: 🇩🇪 [45ms] Server #1
-            name = f"{flag} [{item['ping']}ms] VPN-{i+1}"
-            final_list.append(f"{item['conf']}#{name}")
+        for item in results:
+            # Формат: Флаг [Пинг] ОригинальноеИмя (без рекламы)
+            display_name = f"{item['flag']} [{item['ping']}ms] {item['name']}".strip()
+            final_list.append(f"{item['conf']}#{display_name}")
         
-        final_text = "\n".join(final_list)
         with open(FILE_NAME, "w", encoding="utf-8") as f:
-            f.write(final_text)
+            f.write("\n".join(final_list))
             
         cmd = f'gh gist edit {GID} -f "{FILE_NAME}" {FILE_NAME}'
         subprocess.run(cmd, shell=True, capture_output=True, text=True)
-        print(f"ГОТОВО! Найдено {len(results)} рабочих серверов с флагами.")
+        print(f"УСПЕХ: Обновлено {len(results)} серверов с реальными флагами.")
     else:
-        print("Рабочих серверов не нашли.")
+        print("Рабочих серверов не найдено.")
 
 if __name__ == "__main__":
     run()
