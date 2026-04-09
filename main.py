@@ -1,8 +1,7 @@
 import requests, os, socket, re, time, json, subprocess
 
-# --- НАСТРОЙКИ ---
-# Теперь ID и Токен берутся только из секретов, чтобы не провоцировать фильтры
-GID = "635b44b708e61127ccb3c672316590e5"
+# --- НАСТРОЙКИ (ВСЁ ИЗ СЕКРЕТОВ) ---
+GID = os.environ.get('MY_GIST_ID')
 GTK = os.environ.get('GIST_TOKEN')
 FILE_NAME = "vps.txt"
 
@@ -19,13 +18,13 @@ def check_server(config):
         if match:
             host, port = match.group(1), int(match.group(2))
             start = time.time()
-            with socket.create_connection((host, port), timeout=0.8):
+            with socket.create_connection((host, port), timeout=1.0):
                 return {"conf": re.sub(r'#.*', '', config), "ping": int((time.time() - start) * 1000)}
     except: pass
     return None
 
 def run():
-    print("--- МЕТОД СКРЫТОГО URL ---")
+    print("--- ЗАПУСК ФИНАЛЬНОЙ ВЕРСИИ ---")
     all_configs = []
     for url in SOURCES:
         try:
@@ -34,39 +33,42 @@ def run():
         except: continue
 
     unique = list(set([c.strip() for c in all_configs if c.strip()]))
-    print(f"Найдено ключей: {len(unique)}")
+    print(f"Всего ключей в базе: {len(unique)}")
 
     results = []
-    for c in unique[:150]: # 150 для быстрого, но наглядного теста
+    # Проверяем 1500 штук
+    for c in unique[:1500]:
         res = check_server(c)
         if res: results.append(res)
     
     results.sort(key=lambda x: x['ping'])
-    print(f"Рабочих: {len(results)}")
+    print(f"Рабочих найдено: {len(results)}")
 
     if results:
         final_text = "\n".join([f"{item['conf']}##{i+1}_[Ping:{item['ping']}ms]" for i, item in enumerate(results)])
         payload = json.dumps({"files": {FILE_NAME: {"content": final_text}}})
         
-        # Записываем payload в файл, чтобы CURL не читал его из командной строки
         with open("payload.json", "w") as f:
             f.write(payload)
             
-        print("Отправка через защищенный CURL...")
-        # Собираем URL из переменной окружения внутри оболочки
-        full_url = f"https://github.com{GID}"
+        # Формируем URL
+        api_url = f"https://github.com{GID}"
         
-        # Используем shell=True, чтобы скрыть детали от парсера GitHub
-        cmd = f'curl -L -X PATCH -H "Authorization: token {GTK}" -H "Content-Type: application/json" -d @payload.json {full_url}'
+        # Запуск CURL
+        cmd = ["curl", "-L", "-X", "PATCH", 
+               "-H", f"Authorization: token {GTK}", 
+               "-H", "Content-Type: application/json", 
+               "-d", "@payload.json", api_url]
         
-        process = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+        print("Отправка данных в Gist...")
+        process = subprocess.run(cmd, capture_output=True, text=True)
         
-        if "id" in process.stdout.lower() or process.returncode == 0:
-            print("УСПЕХ! Gist должен быть обновлен.")
+        if process.returncode == 0 and "id" in process.stdout.lower():
+            print("УСПЕХ! Список обновлен, отсортирован и очищен от рекламы.")
         else:
-            print(f"Лог CURL: {process.stdout[:100]}...")
+            print(f"Что-то пошло не так. Статус: {process.returncode}")
     else:
-        print("Рабочих нет.")
+        print("Рабочих серверов не найдено.")
 
 if __name__ == "__main__":
     run()
