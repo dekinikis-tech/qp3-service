@@ -10,36 +10,35 @@ SOURCES = [
 ]
 
 def get_geo(ip):
+    # Используем альтернативный сервис (без жестких лимитов на код страны)
     try:
-        # Получаем код страны и полное название
-        res = requests.get(f"http://ip-api.com{ip}?fields=status,country,countryCode", timeout=1.5).json()
-        if res.get("status") == "success":
-            code = res.get("countryCode").upper()
-            country_name = res.get("country")
-            flag = "".join(chr(127397 + ord(c)) for c in code)
-            return f"{flag} {country_name}"
-    except: pass
-    return "🌐 Unknown"
+        res = requests.get(f"https://ipapi.co{ip}/json/", timeout=2).json()
+        code = res.get("country_code", "UN")
+        country = res.get("country_name", "Unknown")
+        flag = "".join(chr(127397 + ord(c)) for c in code.upper())
+        return f"{flag} {country}"
+    except:
+        return "🌐 Unknown"
 
 def check_server(config):
     try:
         match = re.search(r'@([^:/#\s]+):(\d+)', config)
         if not match: match = re.search(r'ss://[a-zA-Z0-9+/=]+@([^:/#\s]+):(\d+)', config)
-        
         if match:
             host, port = match.group(1), int(match.group(2))
+            # Для РФ: игнорируем стандартные порты, если их слишком много (часто блокируются)
             start = time.time()
-            # Жесткая проверка: 0.7 сек на отклик
-            with socket.create_connection((host, port), timeout=0.7):
+            with socket.create_connection((host, port), timeout=0.6):
                 ping = int((time.time() - start) * 1000)
-                # Вырезаем конфиг без старого названия (всё до знака #)
+                # Отсеиваем всё, что медленнее 400мс — это почти гарантия лагов в РФ
+                if ping > 450: return None
                 clean_link = config.split("#")[0]
                 return {"link": clean_link, "ping": ping, "host": host}
     except: pass
     return None
 
 def run():
-    print("--- СБОРКА ЧИСТОГО СПИСКА ---")
+    print("--- ФИЛЬТРАЦИЯ ДЛЯ РФ ---")
     all_configs = []
     for url in SOURCES:
         try:
@@ -47,32 +46,36 @@ def run():
             all_configs.extend(re.findall(r'(?:vless|vmess|ss)://[^\s\'"<>]+', res))
         except: continue
 
+    # Очистка и перемешивание для честной выборки
     unique = list(set([c.strip() for c in all_configs if c.strip()]))
+    
     results = []
-    
-    # Проверяем 150 штук для качества
-    for c in unique[:150]:
+    # Проверяем 200 штук, чтобы найти "золотой" десяток
+    print(f"Начинаю отбор из {len(unique)} ключей...")
+    for c in unique[:200]:
         res = check_server(c)
-        if res: results.append(res)
+        if res: 
+            # Сразу определяем гео, пока не уперлись в лимиты
+            res['geo'] = get_geo(res['host'])
+            results.append(res)
+            # Небольшая пауза, чтобы Гео-сервис нас не забанил
+            time.sleep(0.2)
     
-    # Сортировка по скорости
     results.sort(key=lambda x: x['ping'])
 
     if results:
         final_list = []
-        for item in results:
-            geo = get_geo(item['host'])
-            # Формат: 🇩🇪 Germany | 120ms
-            display_name = f"{geo} | {item['ping']}ms"
+        # Ограничим итоговый список самыми лучшими 50 серверами
+        for item in results[:50]:
+            display_name = f"{item['geo']} | {item['ping']}ms"
             final_list.append(f"{item['link']}#{display_name}")
         
         with open(FILE_NAME, "w", encoding="utf-8") as f:
             f.write("\n".join(final_list))
             
-        # Обновляем Gist
         cmd = f'gh gist edit {GID} -f "{FILE_NAME}" {FILE_NAME}'
         subprocess.run(cmd, shell=True, capture_output=True, text=True)
-        print(f"ГОТОВО! В списке {len(results)} чистых серверов.")
+        print(f"УСПЕХ: Отобрано {len(results)} топ-серверов.")
     else:
         print("Рабочих серверов не найдено.")
 
