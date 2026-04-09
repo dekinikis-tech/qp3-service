@@ -2,11 +2,11 @@ import requests
 import os
 import socket
 import re
+import base64
 
-# Настройки вашего Gist (пропишем вручную для надежности)
 GIST_ID = os.environ.get('GIST_ID')
 GIST_TOKEN = os.environ.get('GIST_TOKEN')
-TARGET_FILE = "vps.txt"  # Имя вашего файла в Gist
+TARGET_FILE = "vps.txt"
 
 SOURCES = [
     "https://github.com",
@@ -28,16 +28,27 @@ def check_server(config):
 
 def run():
     print("--- ЗАПУСК ОЧИСТКИ ---")
-    all_configs = []
+    raw_configs = []
+    
     for url in SOURCES:
         try:
             res = requests.get(url, timeout=10).text
+            # Если текст похож на Base64 (без пробелов), пробуем декодировать
+            if "://" not in res and len(res) > 20:
+                try:
+                    res = base64.b64decode(res).decode('utf-8')
+                except: pass
+            
             found = re.findall(r'(?:vless|vmess|ss)://[^\s]+', res)
-            all_configs.extend(found)
+            raw_configs.extend(found)
         except: continue
 
-    unique = list(set([c.strip() for c in all_configs]))
-    print(f"Найдено серверов: {len(unique)}")
+    unique = list(set([c.strip() for c in raw_configs]))
+    print(f"Найдено уникальных ключей: {len(unique)}")
+
+    if not unique:
+        print("Ошибка: ключи не найдены. Проверьте источники.")
+        return
 
     # Проверяем первые 300
     working = [c for c in unique[:300] if check_server(c)]
