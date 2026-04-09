@@ -4,9 +4,9 @@ import requests, os, socket, re, time, subprocess, json
 GID = os.environ.get('MY_GIST_ID')
 FILE_NAME = "vps.txt"
 SOURCES = [
-    "https://github.com",
-    "https://github.com",
-    "https://github.com"
+    "https://github.com/AvenCores/goida-vpn-configs/raw/refs/heads/main/githubmirror/26.txt",
+    "https://github.com/AvenCores/goida-vpn-configs/raw/refs/heads/main/githubmirror/1.txt",
+    "https://github.com/AvenCores/goida-vpn-configs/raw/refs/heads/main/githubmirror/6.txt"
 ]
 
 # Кэш для флагов, чтобы не стучаться в API слишком часто
