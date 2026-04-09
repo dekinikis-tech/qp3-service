@@ -3,7 +3,7 @@ import requests, os, socket, re, time, subprocess, concurrent.futures
 GID = os.environ.get('MY_GIST_ID')
 FILE_NAME = "vps.txt"
 
-# Добавляем источники, где чаще всего выкладывают именно Reality/Vision
+# Оставим только самые мощные источники
 SOURCES = [
     "https://github.com/AvenCores/goida-vpn-configs/raw/refs/heads/main/githubmirror/26.txt",
     "https://github.com/AvenCores/goida-vpn-configs/raw/refs/heads/main/githubmirror/1.txt",
@@ -11,14 +11,16 @@ SOURCES = [
 ]
 
 def is_vps_working_in_rf(config):
-    """
-    Ищем только те параметры, которые есть в твоих рабочих ссылках
-    """
     conf_low = config.lower()
     
-    # 1. СТРОЖАЙШИЙ ФИЛЬТР: Только Reality или Vision
-    # Если в ссылке нет этих слов - она 100% не заработает у тебя сейчас
-    if 'reality' not in conf_low and 'vision' not in conf_low:
+    # 1. ЖЕСТКИЙ ПАРАМЕТРИЧЕСКИЙ ФИЛЬТР
+    # Ищем признаки "бронебойных" конфигов: XTLS Vision или gRPC с маскировкой
+    has_vision = 'xtls-rprx-vision' in conf_low
+    has_grpc = 'type=grpc' in conf_low
+    has_reality = 'security=reality' in conf_low
+    
+    # Если это не Reality + (Vision или gRPC), то в 2026 году это скорее всего мусор
+    if not (has_reality and (has_vision or has_grpc)):
         return None
 
     try:
@@ -26,17 +28,23 @@ def is_vps_working_in_rf(config):
         if not match: return None
         host, port = match.group(1), int(match.group(2))
         
-        # 2. Проверка порта (от 50 до 600мс)
+        # 2. ПРОВЕРКА ПОРТА (диапазон 50-500мс)
+        # Уменьшаем таймаут до 0.5, чтобы отсеять лагающие сервера
         start = time.time()
-        with socket.create_connection((host, port), timeout=0.6):
+        with socket.create_connection((host, port), timeout=0.5):
             ping = int((time.time() - start) * 1000)
-            if ping < 50 or ping > 600: return None
+            if ping < 50 or ping > 500: return None
             
-            return {"config": config, "ping": ping}
+            # Дополнительный балл за маскировку под RU-сайты (как в твоих примерах)
+            priority = 0
+            if 'vk.com' in conf_low or 'x5.ru' in conf_low or 'ozon' in conf_low:
+                priority = 1
+            
+            return {"config": config, "ping": ping, "priority": priority}
     except: return None
 
 def run():
-    print("--- ПОИСК REALITY & VISION (РФ СТАНДАРТ) ---")
+    print("--- ЗАПУСК УЛЬТРА-СИТО (Vision & gRPC) ---")
     raw_data = []
     for url in SOURCES:
         try:
@@ -44,8 +52,8 @@ def run():
             raw_data.extend(re.findall(r'vless://[^\s\'"<>]+', res))
         except: continue
 
-    unique = list(set([c.strip() for c in raw_data if len(c) > 100]))
-    print(f"Всего ключей: {len(unique)}. Фильтруем 'элиту'...")
+    unique = list(set([c.strip() for c in raw_data if len(c) > 120]))
+    print(f"Загружено {len(unique)} длинных ключей. Ищем XTLS Vision и gRPC...")
 
     results = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=100) as executor:
@@ -54,18 +62,19 @@ def run():
             res = future.result()
             if res: results.append(res)
     
-    results.sort(key=lambda x: x['ping'])
+    # Сортировка: Сначала те, что с RU-маскировкой, потом по пингу
+    results.sort(key=lambda x: (-x['priority'], x['ping']))
 
     if results:
-        # Выгружаем ТОП-20 (нам не нужны сотни мусора)
-        final_list = [item['config'] for item in results[:20]]
+        # Выгружаем ТОП-15 (самые качественные)
+        final_list = [item['config'] for item in results[:15]]
         with open(FILE_NAME, "w", encoding="utf-8") as f:
             f.write("\n".join(final_list))
             
         subprocess.run(f'gh gist edit {GID} -f "{FILE_NAME}" {FILE_NAME}', shell=True)
-        print(f"УСПЕХ! Найдено {len(results)} серверов Reality/Vision. ТОП-20 в Gist.")
+        print(f"УСПЕХ! Найдено {len(results)} элитных серверов. ТОП-15 в Gist.")
     else:
-        print("Подходящих Reality серверов не найдено.")
+        print("Элитных серверов не найдено. Попробуй позже.")
 
 if __name__ == "__main__":
     run()
