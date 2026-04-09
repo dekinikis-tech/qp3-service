@@ -11,6 +11,10 @@ SOURCES = [
 
 def check_vless_tls(config):
     try:
+        # Убираем [openRay] сразу, чтобы не тратить время
+        if "[openRay]" in config:
+            return None
+
         parsed = urllib.parse.urlparse(config)
         host = parsed.hostname
         port = parsed.port
@@ -22,20 +26,20 @@ def check_vless_tls(config):
         context = ssl._create_unverified_context()
         start = time.time()
         
-        # Минимальный таймаут для сверхзвуковых серверов
-        with socket.create_connection((host, port), timeout=2.0) as sock:
-            with context.wrap_socket(sock, server_hostname=sni[0] if isinstance(sni, list) else sni) as ssock:
+        # Таймаут 3 секунды, чтобы прогрузить сервера с пингом до 800мс
+        with socket.create_connection((host, port), timeout=3.0) as sock:
+            with context.wrap_socket(sock, server_hostname=sni if isinstance(sni, list) else sni) as ssock:
                 ping = int((time.time() - start) * 1000)
                 
-                # ФИЛЬТР: Только "сверхзвук" (от 0 до 50мс по меркам GitHub)
-                if 0 <= ping <= 50:
+                # ТВОЙ НОВЫЙ ДИАПАЗОН: от 1 до 800мс
+                if 1 <= ping <= 800:
                     return {"config": config, "ping": ping}
     except:
         return None
     return None
 
 def run():
-    print("--- ЗАПУСК: ПОИСК СВЕРХЗВУКОВЫХ СЕРВЕРОВ (0-50ms) ---")
+    print("--- ПОИСК В ДИАПАЗОНЕ 1-800 MS (БЕЗ OPENRAY) ---")
     raw_data = []
     for url in SOURCES:
         try:
@@ -46,27 +50,29 @@ def run():
     unique = list(set([c.strip() for c in raw_data if len(c) > 100]))
     results = []
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=80) as executor:
+    # 100 потоков, так как диапазон широкий и нужно проверить много ссылок
+    with concurrent.futures.ThreadPoolExecutor(max_workers=100) as executor:
         futures = {executor.submit(check_vless_tls, c): c for c in unique}
         for future in concurrent.futures.as_completed(futures):
             res = future.result()
-            if res: results.append(res)
+            if res: 
+                results.append(res)
 
-    # Сортируем: самые быстрые в начало
+    # Сортируем: сначала самые быстрые
     results.sort(key=lambda x: x['ping'])
-    print(f"Найдено сверхзвуковых: {len(results)}")
+    print(f"Всего найдено подходящих: {len(results)}")
 
     if results:
-        # Берем ТОП-50 самых быстрых
-        final_list = [item['config'] for item in results[:200]]
+        # Берем ТОП-50
+        final_list = [item['config'] for item in results[:50]]
         with open(FILE_NAME, "w", encoding="utf-8") as f:
             f.write("\n".join(final_list))
             
         if GID:
             subprocess.run(f'gh gist edit {GID} -f "{FILE_NAME}" {FILE_NAME}', shell=True)
-            print(f"УСПЕХ! Сверхзвуковой список обновлен.")
+            print("Gist обновлен!")
     else:
-        print("Сверхзвуковых серверов не найдено. Попробуй расширить диапазон до 100мс.")
+        print("Ничего не найдено.")
 
 if __name__ == "__main__":
     run()
