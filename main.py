@@ -1,8 +1,7 @@
-import requests, os, socket, re, time, json, subprocess
+import requests, os, socket, re, time, subprocess
 
-# --- НАСТРОЙКИ (ВСЁ ИЗ СЕКРЕТОВ) ---
+# --- НАСТРОЙКИ ---
 GID = os.environ.get('MY_GIST_ID')
-GTK = os.environ.get('GIST_TOKEN')
 FILE_NAME = "vps.txt"
 
 SOURCES = [
@@ -18,13 +17,17 @@ def check_server(config):
         if match:
             host, port = match.group(1), int(match.group(2))
             start = time.time()
+            # Пытаемся подключиться за 1 секунду
             with socket.create_connection((host, port), timeout=1.0):
-                return {"conf": re.sub(r'#.*', '', config), "ping": int((time.time() - start) * 1000)}
+                ping = int((time.time() - start) * 1000)
+                # Удаляем рекламу (всё после знака #)
+                clean_conf = re.sub(r'#.*', '', config).strip()
+                return {"conf": clean_conf, "ping": ping}
     except: pass
     return None
 
 def run():
-    print("--- ЗАПУСК ФИНАЛЬНОЙ ВЕРСИИ ---")
+    print(f"--- БЫСТРЫЙ ТЕСТ: 50 СЕРВЕРОВ ---")
     all_configs = []
     for url in SOURCES:
         try:
@@ -33,42 +36,35 @@ def run():
         except: continue
 
     unique = list(set([c.strip() for c in all_configs if c.strip()]))
-    print(f"Всего ключей в базе: {len(unique)}")
+    print(f"Найдено в базе: {len(unique)}")
 
     results = []
-    # Проверяем 1500 штук
-    for c in unique[:1500]:
+    # СТРОГО 50 ШТУК, чтобы было быстро
+    for c in unique[:50]:
         res = check_server(c)
         if res: results.append(res)
     
+    # Сортируем: самые быстрые сверху
     results.sort(key=lambda x: x['ping'])
-    print(f"Рабочих найдено: {len(results)}")
+    print(f"Рабочих из 50: {len(results)}")
 
     if results:
-        final_text = "\n".join([f"{item['conf']}##{i+1}_[Ping:{item['ping']}ms]" for i, item in enumerate(results)])
-        payload = json.dumps({"files": {FILE_NAME: {"content": final_text}}})
+        # Формируем текст
+        final_text = "\n".join([f"{item['conf']}#⭐_{i+1}_[Ping:{item['ping']}ms]" for i, item in enumerate(results)])
         
-        with open("payload.json", "w") as f:
-            f.write(payload)
+        with open(FILE_NAME, "w", encoding="utf-8") as f:
+            f.write(final_text)
             
-        # Формируем URL
-        api_url = f"https://github.com{GID}"
+        # Отправка через официальную утилиту GH
+        cmd = f"gh gist edit {GID} -f {FILE_NAME}={FILE_NAME}"
+        process = subprocess.run(cmd, shell=True, capture_output=True, text=True)
         
-        # Запуск CURL
-        cmd = ["curl", "-L", "-X", "PATCH", 
-               "-H", f"Authorization: token {GTK}", 
-               "-H", "Content-Type: application/json", 
-               "-d", "@payload.json", api_url]
-        
-        print("Отправка данных в Gist...")
-        process = subprocess.run(cmd, capture_output=True, text=True)
-        
-        if process.returncode == 0 and "id" in process.stdout.lower():
-            print("УСПЕХ! Список обновлен, отсортирован и очищен от рекламы.")
+        if process.returncode == 0:
+            print("ПОБЕДА! Gist обновлен за полминуты.")
         else:
-            print(f"Что-то пошло не так. Статус: {process.returncode}")
+            print(f"Ошибка GH: {process.stderr}")
     else:
-        print("Рабочих серверов не найдено.")
+        print("Рабочих серверов не нашли.")
 
 if __name__ == "__main__":
     run()
