@@ -1,7 +1,7 @@
 import requests, os, socket, re, time
 
 # --- НАСТРОЙКИ ---
-GID = "635b44b708e61127ccb3c672316590e5" # Твой ID Gist вписан прямо сюда
+GID = "635b44b708e61127ccb3c672316590e5" 
 GTK = os.environ.get('GIST_TOKEN')
 FILE_NAME = "vps.txt" 
 
@@ -18,56 +18,51 @@ def check_server(config):
         if match:
             host, port = match.group(1), int(match.group(2))
             start = time.time()
-            with socket.create_connection((host, port), timeout=1.2):
+            with socket.create_connection((host, port), timeout=0.8): # Быстрый таймаут
                 latency = int((time.time() - start) * 1000)
-                # Очистка названия от рекламы
                 clean_conf = re.sub(r'#.*', '', config)
-                return {"conf": clean_conf, "ping": latency, "host": host}
+                return {"conf": clean_conf, "ping": latency}
     except: pass
     return None
 
 def run():
-    print("--- ЗАПУСК УЛЬТРА-ОЧИСТКИ ---")
+    print("--- МОЛНИЕНОСНЫЙ СТАРТ (50 шт) ---")
     all_configs = []
     for url in SOURCES:
         try:
-            res = requests.get(url, timeout=20).text
+            res = requests.get(url, timeout=10).text
             found = re.findall(r'(?:vless|vmess|ss)://[^\s\'"<>]+', res)
             all_configs.extend(found)
         except: continue
 
     unique = list(set([c.strip() for c in all_configs if c.strip()]))
-    print(f"Всего ключей: {len(unique)}")
+    print(f"Найдено ключей: {len(unique)}")
 
     results = []
-    # Проверяем до 2000 серверов
-    for c in unique[:2000]:
+    # ВСЕГО 50 ШТУК ДЛЯ ТЕСТА
+    for c in unique[:50]:
         res = check_server(c)
         if res: results.append(res)
     
-    # Сортировка по пингу (от быстрых к медленным)
     results.sort(key=lambda x: x['ping'])
     print(f"Рабочих найдено: {len(results)}")
 
     if results:
-        # Формируем итоговый список с красивыми именами
-        final_list = []
-        for i, item in enumerate(results):
-            # Упрощенное имя: Номер - Пинг - Хост
-            name = f"#{i+1} | Ping:{item['ping']}ms | Server"
-            final_list.append(f"{item['conf']}#{name}")
-
-        final_url = f"https://github.com{GID}"
+        final_list = [f"{item['conf']}##{i+1}_[Ping:{item['ping']}ms]" for i, item in enumerate(results)]
+        
         headers = {"Authorization": f"token {GTK}", "Accept": "application/vnd.github.v3+json"}
         payload = {"files": {FILE_NAME: {"content": "\n".join(final_list)}}}
         
-        r = requests.patch(final_url, headers=headers, json=payload)
+        # Прямая ссылка на API
+        url = "https://github.com" + GID
+        
+        r = requests.patch(url, headers=headers, json=payload)
         if r.status_code == 200:
-            print("УСПЕХ! Gist обновлен и отсортирован.")
+            print("ПОБЕДА! Проверь свой Gist.")
         else:
-            print(f"Ошибка API: {r.status_code} - {r.text}")
+            print(f"Ошибка API: {r.status_code}")
     else:
-        print("Рабочих серверов не найдено.")
+        print("Рабочих нет.")
 
 if __name__ == "__main__":
     run()
