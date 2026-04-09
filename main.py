@@ -11,7 +11,7 @@ TARGET_FILE = "vps.txt" # Убедитесь, что файл в Gist назыв
 # Сюда вставляйте любые ссылки на GitHub (скрипт сам их поправит)
 SOURCES = [
     "https://github.com/AvenCores/goida-vpn-configs/raw/refs/heads/main/githubmirror/26.txt"
-    "https://github.com/AvenCores/goida-vpn-configs/raw/refs/heads/main/githubmirror/1.txt",
+    "https://github.com/AvenCores/goida-vpn-configs/raw/refs/heads/main/githubmirror/1.txt"
     "https://github.com/AvenCores/goida-vpn-configs/raw/refs/heads/main/githubmirror/6.txt"
 ]
 
