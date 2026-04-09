@@ -10,14 +10,14 @@ SOURCES = [
 ]
 
 def get_geo(ip):
-    # Упрощенный Гео-чек для массовой проверки (только код страны)
     try:
-        res = requests.get(f"https://ipapi.co{ip}/json/", timeout=1).json()
-        code = res.get("country_code", "UN").upper()
-        country = res.get("country", "Unknown")
-        flag = "".join(chr(127397 + ord(c)) for c in code)
-        return f"{flag} {country}"
-    except: return "🌐 Unknown"
+        res = requests.get(f"http://ip-api.com{ip}?fields=status,country,countryCode", timeout=1.5).json()
+        if res.get("status") == "success":
+            code = res.get("countryCode").upper()
+            flag = "".join(chr(127397 + ord(c)) for c in code)
+            return f"{flag} {res.get('country')}"
+    except: pass
+    return "🌐 Unknown"
 
 def check_server(config):
     try:
@@ -26,59 +26,61 @@ def check_server(config):
         if match:
             host, port = match.group(1), int(match.group(2))
             start = time.time()
-            # Ультра-жесткий таймаут для отсева мусора
-            with socket.create_connection((host, port), timeout=0.5):
+            # Увеличили таймаут до 1.0 сек, чтобы ловить сервера до 700-800мс
+            with socket.create_connection((host, port), timeout=1.0):
                 ping = int((time.time() - start) * 1000)
-                if ping > 400: return None # РФ-фильтр
+                
+                # НОВЫЙ ПОРОГ: Пропускаем всё, что быстрее 800мс
+                if ping > 800: return None 
+                
+                # Полная очистка ссылки от старого мусора
                 clean_link = config.split("#")[0]
                 return {"link": clean_link, "ping": ping, "host": host}
     except: pass
     return None
 
 def run():
-    print("--- ЗАПУСК ПОЛНОЙ ПРОВЕРКИ 4000+ СЕРВЕРОВ ---")
+    print("--- ЗАПУСК: БАЛАНС (ДО 800мс) ---")
     raw_data = []
     for url in SOURCES:
         try:
-            res = requests.get(url, timeout=15).text
+            res = requests.get(url, timeout=10).text
             raw_data.extend(re.findall(r'(?:vless|vmess|ss)://[^\s\'"<>]+', res))
         except: continue
 
-    unique = list(set([c.strip() for c in raw_data if c.strip()]))
-    print(f"Загружено из источников: {len(unique)} ключей.")
+    unique = list(set([c.strip() for c in raw_data if len(c) > 30]))
+    print(f"Всего ключей в базе: {len(unique)}")
 
     results = []
-    # Многопоточный движок (100 потоков)
-    print("Начинаю массовую фильтрацию (это будет быстро)...")
-    with concurrent.futures.ThreadPoolExecutor(max_workers=100) as executor:
-        future_to_conf = {executor.submit(check_server, c): c for c in unique}
-        for future in concurrent.futures.as_completed(future_to_conf):
+    # Проверяем ВСЮ базу в 150 потоков
+    with concurrent.futures.ThreadPoolExecutor(max_workers=150) as executor:
+        futures = {executor.submit(check_server, c): c for c in unique}
+        for future in concurrent.futures.as_completed(futures):
             res = future.result()
             if res: results.append(res)
     
-    print(f"Первичный отбор пройден: {len(results)} серверов.")
-    
-    # Сортировка по скорости
+    # Сортировка: быстрые сверху
     results.sort(key=lambda x: x['ping'])
+    print(f"Найдено рабочих: {len(results)}")
 
     if results:
-        # Берем ТОП-100 лучших и узнаем их ГЕО (не больше 100, чтобы не забанили API)
         final_list = []
-        print("Определяю страны для ТОП-серверов...")
-        for i, item in enumerate(results[:100]):
+        # Выгружаем ТОП-150 серверов (теперь список будет внушительным)
+        for i, item in enumerate(results[:150]):
+            # Гео делаем только для тех, кто попал в итоговый список
             geo = get_geo(item['host'])
             display_name = f"{geo} | {item['ping']}ms"
             final_list.append(f"{item['link']}#{display_name}")
-            if i % 10 == 0: time.sleep(0.5) # Пауза для стабильности API
+            # Пауза, чтобы не забанили Гео-API
+            if i % 15 == 0: time.sleep(0.5)
         
         with open(FILE_NAME, "w", encoding="utf-8") as f:
             f.write("\n".join(final_list))
             
-        cmd = f'gh gist edit {GID} -f "{FILE_NAME}" {FILE_NAME}'
-        subprocess.run(cmd, shell=True, capture_output=True, text=True)
-        print(f"ГОТОВО! В твоем Gist теперь только сливки: {len(final_list)} лучших серверов.")
+        subprocess.run(f'gh gist edit {GID} -f "{FILE_NAME}" {FILE_NAME}', shell=True)
+        print(f"УСПЕХ! В Gist отправлено {len(final_list)} серверов.")
     else:
-        print("Даже после полной проверки ничего путного не найдено.")
+        print("Рабочих серверов не найдено.")
 
 if __name__ == "__main__":
     run()
