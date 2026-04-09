@@ -17,10 +17,8 @@ def check_server(config):
         if match:
             host, port = match.group(1), int(match.group(2))
             start = time.time()
-            # Пытаемся подключиться за 1 секунду
             with socket.create_connection((host, port), timeout=1.0):
                 ping = int((time.time() - start) * 1000)
-                # Удаляем рекламу (всё после знака #)
                 clean_conf = re.sub(r'#.*', '', config).strip()
                 return {"conf": clean_conf, "ping": ping}
     except: pass
@@ -39,28 +37,25 @@ def run():
     print(f"Найдено в базе: {len(unique)}")
 
     results = []
-    # СТРОГО 50 ШТУК, чтобы было быстро
     for c in unique[:50]:
         res = check_server(c)
         if res: results.append(res)
     
-    # Сортируем: самые быстрые сверху
     results.sort(key=lambda x: x['ping'])
     print(f"Рабочих из 50: {len(results)}")
 
     if results:
-        # Формируем текст
         final_text = "\n".join([f"{item['conf']}#⭐_{i+1}_[Ping:{item['ping']}ms]" for i, item in enumerate(results)])
         
         with open(FILE_NAME, "w", encoding="utf-8") as f:
             f.write(final_text)
             
-        # Отправка через официальную утилиту GH
-        cmd = f"gh gist edit {GID} -f {FILE_NAME}={FILE_NAME}"
+        # ИСПРАВЛЕННАЯ КОМАНДА
+        cmd = f'gh gist edit {GID} -f "{FILE_NAME}" {FILE_NAME}'
         process = subprocess.run(cmd, shell=True, capture_output=True, text=True)
         
         if process.returncode == 0:
-            print("ПОБЕДА! Gist обновлен за полминуты.")
+            print("ПОБЕДА! Gist обновлен.")
         else:
             print(f"Ошибка GH: {process.stderr}")
     else:
