@@ -4,8 +4,7 @@ GID = os.environ.get('MY_GIST_ID')
 FILE_NAME = "vps.txt"
 
 SOURCES = [
-   "https://github.com/AvenCores/goida-vpn-configs/raw/refs/heads/main/githubmirror/26.txt",
-"https://github.com/AvenCores/goida-vpn-configs/raw/refs/heads/main/githubmirror/6.txt"
+   "https://github.com/AvenCores/goida-vpn-configs/raw/refs/heads/main/githubmirror/26.txt"
 ]
 
 def check_vless_tls(config):
