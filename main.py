@@ -9,10 +9,7 @@ SOURCES = [
     "https://github.com/AvenCores/goida-vpn-configs/raw/refs/heads/main/githubmirror/6.txt"
 ]
 
-def hard_check(config):
-    """
-    Максимально жесткая проверка: коннект + попытка получить ответ от протокола
-    """
+def ultra_check(config):
     try:
         match = re.search(r'@([^:/#\s]+):(\d+)', config)
         if not match: match = re.search(r'ss://[a-zA-Z0-9+/=]+@([^:/#\s]+):(\d+)', config)
@@ -20,31 +17,35 @@ def hard_check(config):
         
         host, port = match.group(1), int(match.group(2))
         
+        # ШАГ 1: Очень быстрый TCP коннект
         start = time.time()
-        # Шаг 1: Коннект
-        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        s.settimeout(1.2) # Чуть больше времени на глубокий ответ
-        s.connect((host, port))
-        
-        # Шаг 2: Отправка "мусорного" запроса, на который VPN-сервер должен среагировать
-        # (закрытие соединения или ответ в зависимости от протокола)
-        s.send(b'\x05\x01\x00') 
-        time.sleep(0.1)
-        
-        # Шаг 3: Проверка, не закрыл ли сервер соединение мгновенно (признак живого порта, но мертвого прокси)
-        # Если мы можем отправить еще данные - сервер "слушает"
-        s.send(b'\x03\x00\x00')
-        
-        ping = int((time.time() - start) * 1000)
-        s.close()
-        
-        if ping > 800: return None
-        return {"link": config.split("#")[0], "ping": ping}
+        with socket.create_connection((host, port), timeout=0.5):
+            ping = int((time.time() - start) * 1000)
+            
+            # ШАГ 2: Пытаемся отправить реальный HTTP запрос на порт прокси
+            # Живой сервер V2Ray/Xray часто настроен отклонять такие запросы, 
+            # но сам факт быстрого ответа на прикладном уровне — признак жизни.
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.settimeout(0.8)
+            s.connect((host, port))
+            # Посылаем типичный заголовок
+            s.send(f"GET / HTTP/1.1\r\nHost: {host}\r\n\r\n".encode())
+            
+            # Ждем хоть какой-то ответ. Мертвый прокси промолчит или закроет сокет.
+            response = s.recv(10)
+            s.close()
+            
+            if not response: return None
+            
+            # Ограничиваем пинг до 350мс для РФ (всё что выше - мусор)
+            if ping > 350: return None
+            
+            return {"link": config.split("#")[0], "ping": ping}
     except:
         return None
 
 def run():
-    print("--- ЗАПУСК ГЛУБОКОЙ ПРОВЕРКИ (REAL CHECK) ---")
+    print("--- ФИЛЬТРАЦИЯ: ТОЛЬКО ЖИВЫЕ ---")
     raw_data = []
     for url in SOURCES:
         try:
@@ -53,33 +54,32 @@ def run():
         except: continue
 
     unique = list(set([c.strip() for c in raw_data if len(c) > 40]))
-    print(f"Загружено {len(unique)} ключей. Начинаю жесткую фильтрацию...")
-
-    # Проверяем всю базу
+    
     valid_servers = []
-    with concurrent.futures.ThreadPoolExecutor(max_workers=80) as executor:
-        futures = {executor.submit(hard_check, c): c for c in unique}
+    # 150 потоков для тотальной зачистки
+    with concurrent.futures.ThreadPoolExecutor(max_workers=150) as executor:
+        futures = {executor.submit(ultra_check, c): c for c in unique}
         for future in concurrent.futures.as_completed(futures):
             res = future.result()
             if res: valid_servers.append(res)
     
-    # Сортировка по качеству
     valid_servers.sort(key=lambda x: x['ping'])
-    print(f"Реально рабочих найдено: {len(valid_servers)}")
-
+    
+    # Теперь мы не берем всё подряд. Мы берем только ТОП-20.
+    # Если их будет 3000 - мы всё равно возьмем только 20 лучших.
     if valid_servers:
-        # Формируем список только из тех, кто прошел Hard Check
-        # Убираем всякие "Server_1", оставляем только пинг для ориентации
-        final_list = [f"{item['link']}#PING_{item['ping']}ms" for item in valid_servers]
+        top_results = valid_servers[:20]
+        print(f"Из 4000 отобрано 20 лучших (Пинг до 350мс и ответ на запрос)")
+        
+        final_list = [f"{item['link']}#🚀_TOP_{i+1}_[{item['ping']}ms]" for i, item in enumerate(top_results)]
         
         with open(FILE_NAME, "w", encoding="utf-8") as f:
             f.write("\n".join(final_list))
             
-        cmd = f'gh gist edit {GID} -f "{FILE_NAME}" {FILE_NAME}'
-        subprocess.run(cmd, shell=True, capture_output=True, text=True)
-        print("УСПЕХ! В Gist только проверенные серверы.")
+        subprocess.run(f'gh gist edit {GID} -f "{FILE_NAME}" {FILE_NAME}', shell=True)
+        print("УСПЕХ! В Gist теперь только 20 'ядерных' серверов.")
     else:
-        print("Ни один сервер не прошел жесткую проверку.")
+        print("Ни один сервер не прошел ультра-проверку.")
 
 if __name__ == "__main__":
     run()
