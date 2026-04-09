@@ -1,26 +1,20 @@
 name: VPN Auto Update
 on:
   schedule:
-    - cron: '0 * * * *' # Запуск каждый час (минута 0 каждого часа)
-  workflow_dispatch:   # Кнопка для ручного запуска
+    - cron: '0 * * * *'
+  workflow_dispatch:
 
 jobs:
   update_gist:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v3
-
-      - name: Set up Python
-        uses: actions/setup-python@v4
+      - uses: actions/checkout@v3
+      - uses: actions/setup-python@v4
         with:
           python-version: '3.9'
-
-      - name: Install dependencies
-        run: pip install requests
-
+      - run: pip install requests
       - name: Run script
         env:
-          GIST_ID: ${{ secrets.GIST_ID }}
+          MY_GIST_ID: ${{ secrets.MY_GIST_ID }}
           GIST_TOKEN: ${{ secrets.GIST_TOKEN }}
         run: python main.py
