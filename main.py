@@ -9,9 +9,6 @@ SOURCES = [
     "https://github.com/AvenCores/goida-vpn-configs/raw/refs/heads/main/githubmirror/6.txt"
 ]
 
-# Список "безопасных" SNI для подмены, если в конфиге мусор
-SAFE_SNIS = ["://samsung.com", "://microsoft.com", "://google.com"]
-
 def check_vless_tls(config):
     try:
         parsed = urllib.parse.urlparse(config)
@@ -20,28 +17,25 @@ def check_vless_tls(config):
         if not host or not port: return None
         
         params = urllib.parse.parse_qs(parsed.query)
-        # Пробуем взять SNI из конфига, если нет - ставим системный
-        sni = params.get('sni', [None])[0] or params.get('peer', [None])[0] or "://microsoft.com"
+        sni = params.get('sni', [None]) or params.get('peer', [None]) or "://google.com"
         
         context = ssl._create_unverified_context()
         start = time.time()
         
-        with socket.create_connection((host, port), timeout=3.5) as sock:
-            with context.wrap_socket(sock, server_hostname=sni) as ssock:
+        # Минимальный таймаут для сверхзвуковых серверов
+        with socket.create_connection((host, port), timeout=2.0) as sock:
+            with context.wrap_socket(sock, server_hostname=sni[0] if isinstance(sni, list) else sni) as ssock:
                 ping = int((time.time() - start) * 1000)
                 
-                # НОВЫЙ ФИЛЬТР: от 10мс до 2500мс
-                if 10 <= ping <= 2500:
-                    # Добавляем в название сервера инфо о пинге для удобства в приложении
-                    new_name = f"Ping_{ping}ms"
-                    new_config = config.split('#')[0] + f"#{new_name}"
-                    return {"config": new_config, "ping": ping}
+                # ФИЛЬТР: Только "сверхзвук" (от 0 до 50мс по меркам GitHub)
+                if 0 <= ping <= 50:
+                    return {"config": config, "ping": ping}
     except:
         return None
     return None
 
 def run():
-    print("--- ПОИСК С ШИРОКИМ ДИАПАЗОНОМ ПИНГА ---")
+    print("--- ЗАПУСК: ПОИСК СВЕРХЗВУКОВЫХ СЕРВЕРОВ (0-50ms) ---")
     raw_data = []
     for url in SOURCES:
         try:
@@ -52,27 +46,27 @@ def run():
     unique = list(set([c.strip() for c in raw_data if len(c) > 100]))
     results = []
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=60) as executor:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=80) as executor:
         futures = {executor.submit(check_vless_tls, c): c for c in unique}
         for future in concurrent.futures.as_completed(futures):
             res = future.result()
             if res: results.append(res)
 
-    # Сортируем от меньшего пинга к большему
+    # Сортируем: самые быстрые в начало
     results.sort(key=lambda x: x['ping'])
-    print(f"Найдено живых: {len(results)}")
+    print(f"Найдено сверхзвуковых: {len(results)}")
 
     if results:
-        # Берем топ 50 самых быстрых из найденных
+        # Берем ТОП-50 самых быстрых
         final_list = [item['config'] for item in results[:50]]
         with open(FILE_NAME, "w", encoding="utf-8") as f:
             f.write("\n".join(final_list))
             
         if GID:
             subprocess.run(f'gh gist edit {GID} -f "{FILE_NAME}" {FILE_NAME}', shell=True)
-            print("Готово! Проверь приложение.")
+            print(f"УСПЕХ! Сверхзвуковой список обновлен.")
     else:
-        print("Ничего не найдено.")
+        print("Сверхзвуковых серверов не найдено. Попробуй расширить диапазон до 100мс.")
 
 if __name__ == "__main__":
     run()
