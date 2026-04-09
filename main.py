@@ -62,7 +62,7 @@ def run():
 
     if results:
         # Сохраняем ТОП-50 самых качественных
-        final_list = [item['config'] for item in results[:50]]
+        final_list = [item['config'] for item in results[:100]]
         with open(FILE_NAME, "w", encoding="utf-8") as f:
             f.write("\n".join(final_list))
             
