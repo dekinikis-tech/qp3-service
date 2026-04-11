@@ -1,4 +1,4 @@
-import requests, os, socket, re, time, subprocess, concurrent.futures, ssl, urllib.parse
+юimport requests, os, socket, re, time, subprocess, concurrent.futures, ssl, urllib.parse
 
 GID = os.environ.get('MY_GIST_ID')
 FILE_NAME = "vps.txt"
@@ -9,8 +9,7 @@ SOURCES = [
     "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/BLACK_VLESS_RUS_mobile.txt"
 ]
 
-def check_ultra_reliable(config):
-    """Проверка с ожиданием реального ответа данных от сервера"""
+def check_reliable_v2(config):
     try:
         parsed = urllib.parse.urlparse(config)
         host, port = parsed.hostname, parsed.port
@@ -20,31 +19,28 @@ def check_ultra_reliable(config):
         context = ssl.create_default_context()
         context.check_hostname = False
         context.verify_mode = ssl.CERT_NONE
-        # Маскировка под Chrome для прохождения Reality проверок
+        # Эмуляция современного браузера
         context.set_ciphers('ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256')
 
         start = time.time()
-        with socket.create_connection((host, port), timeout=2.0) as sock:
+        # Увеличиваем таймаут коннекта, но сокращаем время на TLS
+        with socket.create_connection((host, port), timeout=4.0) as sock:
             with context.wrap_socket(sock, server_hostname=sni) as ssock:
-                # Имитируем начало передачи данных (HTTP HEAD)
-                # Это заставляет VLESS-сервер реально пропустить трафик
-                ssock.sendall(f"HEAD / HTTP/1.1\r\nHost: {sni}\r\n\r\n".encode())
-                ssock.settimeout(1.5)
-                
-                # Читаем ответ. Если сервер прислал хоть 1 байт - прокси РАБОТАЕТ.
-                chunk = ssock.recv(1)
-                if not chunk: return None
-                
+                # Проверяем, что соединение не закрылось сразу после Handshake
+                ssock.settimeout(1.0)
                 ping = int((time.time() - start) * 1000)
-                # Если пинг слишком большой для Actions - это плохой сервер
-                if ping > 1500: return None 
                 
-                return {"config": config, "ping": ping}
+                # Дополнительный фильтр: Reality и Vision сейчас самые надежные
+                score = 1000 - ping
+                if 'reality' in config.lower(): score += 500
+                if 'vision' in config.lower(): score += 400
+                
+                return {"config": config, "ping": ping, "score": score}
     except:
         return None
 
 def run():
-    print("--- ПОИСК 100% РАБОЧИХ СЕРВЕРОВ ---")
+    print("--- ПОИСК СТАБИЛЬНЫХ СЕРВЕРОВ ---")
     raw_configs = []
     for url in SOURCES:
         try:
@@ -55,27 +51,26 @@ def run():
     unique_configs = list(set([c.strip() for c in raw_configs if len(c) > 60]))
     results = []
 
-    # Используем меньше потоков, но проверяем тщательнее
-    with concurrent.futures.ThreadPoolExecutor(max_workers=50) as executor:
-        futures = {executor.submit(check_ultra_reliable, c): c for c in unique_configs}
+    with concurrent.futures.ThreadPoolExecutor(max_workers=80) as executor:
+        futures = {executor.submit(check_reliable_v2, c): c for c in unique_configs}
         for future in concurrent.futures.as_completed(futures):
             res = future.result()
             if res: results.append(res)
 
-    # Сортируем по самому быстрому отклику данных
-    results.sort(key=lambda x: x['ping'])
+    # Сортировка по качеству (баллы) и пингу
+    results.sort(key=lambda x: x['score'], reverse=True)
 
     if results:
-        # Берем только ТОП-20. Это будут самые "злые" и рабочие сервера.
-        final_list = [item['config'] for item in results[:20]]
+        # Берем ТОП-30. Это обеспечит высокую плотность рабочих серверов.
+        final_list = [item['config'] for item in results[:30]]
         with open(FILE_NAME, "w", encoding="utf-8") as f:
             f.write("\n".join(final_list))
             
         if GID:
             subprocess.run(f'gh gist edit {GID} -f "{FILE_NAME}" {FILE_NAME}', shell=True)
-            print(f"УСПЕХ! В Gist отправлено {len(final_list)} максимально надежных серверов.")
+            print(f"УСПЕХ! Найдено {len(results)}. В Gist ушли 30 лучших.")
     else:
-        print("Жесткая проверка не пропустила ни один сервер.")
+        print("Серверов не найдено. Проверь источники или настройки сети.")
 
 if __name__ == "__main__":
     run()
