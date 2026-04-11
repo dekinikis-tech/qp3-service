@@ -12,85 +12,87 @@ SOURCES = [
 WHITE_DOMAINS = ['union.monster', 'tcpnet.fun', 'mutabor-sec.ru', 'whoshere.site', 'deepseek', 'vpnsz.net']
 BLACK_LIST = ['meshky', '4mohsen', 'white', '708087']
 
-def is_alive(config):
-    """Быстрая проверка порта. Если порт закрыт - сервер труп."""
+def check_ping_fast(config_item):
+    """Максимально быстрый замер пинга порта"""
     try:
+        config = config_item["config"]
         parsed = urllib.parse.urlparse(config)
         host, port = parsed.hostname, int(parsed.port or 443)
-        # Тайм-аут 2 секунды - если порт не ответил, нам такой сервер не нужен
+        
+        start = time.time()
+        # Таймаут 2.0 секунды, чтобы не ждать безнадежных
         with socket.create_connection((host, port), timeout=2.0):
-            return True
+            ms = int((time.time() - start) * 1000)
+            config_item["ping"] = ms
+            return config_item
     except:
-        return False
-
-def get_quality_score(config):
-    score = 0
-    c_low = config.lower()
-    # Приоритет твоим доменам
-    if any(domain in c_low for domain in WHITE_DOMAINS): score += 5000
-    # Приоритет технологиям
-    if 'xtls-rprx-vision' in c_low: score += 1000
-    if 'security=reality' in c_low: score += 500
-    return score
+        return None
 
 def is_garbage(config):
+    """Жесткий фильтр мусора по именам"""
     name = urllib.parse.unquote(config.split('#')[-1]).strip() if '#' in config else ""
-    # Фильтр: 3+ цифры подряд (0640), короткие имена, черный список
     if re.search(r'\d{3,}', name) or len(name) < 4 or any(bad in name.lower() for bad in BLACK_LIST):
         return True
     return False
 
+def get_tech_score(config):
+    """Приоритет технологиям обхода (для сортировки при равном пинге)"""
+    c_low = config.lower()
+    score = 0
+    if any(domain in c_low for domain in WHITE_DOMAINS): score += 5000
+    if 'xtls-rprx-vision' in c_low: score += 1000
+    if 'security=reality' in c_low: score += 500
+    return score
+
 def run():
-    print("--- СБОР И АВТО-ФИЛЬТРАЦИЯ МЕРТВЫХ ---")
+    print("--- ГЛОБАЛЬНЫЙ СКАНЕР ВСЕХ ИСТОЧНИКОВ ---")
     all_raw = []
     headers = {'User-Agent': 'Mozilla/5.0'}
     
     for url in SOURCES:
         try:
-            res = requests.get(url, timeout=12, headers=headers).text
+            res = requests.get(url, timeout=15, headers=headers).text
             all_raw.extend(re.findall(r'vless://[^\s\'"<>]+', res))
         except: continue
 
     unique = list(set(all_raw))
-    print(f"Найдено в источниках: {len(unique)}")
+    print(f"Всего ссылок в базе: {len(unique)}")
 
-    # 1. Сначала отбираем потенциально крутые и чистые сервера
+    # 1. Сначала фильтруем только по именам
     candidates = []
     for cfg in unique:
         if not is_garbage(cfg):
-            score = get_quality_score(cfg)
-            if score > 0:
-                candidates.append({"config": cfg, "score": score})
+            candidates.append({"config": cfg, "tech_score": get_tech_score(cfg), "ping": 9999})
 
-    # Сортируем, чтобы проверять в первую очередь самых лучших
-    candidates.sort(key=lambda x: x['score'], reverse=True)
+    print(f"Кандидатов после фильтрации имен: {len(candidates)}")
+    print(f"Запускаем массовую проверку пинга в 100 потоков...")
     
-    # 2. Проверяем только топ-70 кандидатов на "живость", чтобы не тратить время
     real_alive = []
-    print(f"Проверяем доступность топ-{len(candidates[:70])} серверов...")
-    
-    with concurrent.futures.ThreadPoolExecutor(max_workers=30) as executor:
-        # Запускаем проверку порта
-        check_tasks = {executor.submit(is_alive, item["config"]): item for item in candidates[:70]}
-        for future in concurrent.futures.as_completed(check_tasks):
-            item = check_tasks[future]
-            if future.result(): # Если порт открыт
-                real_alive.append(item)
+    # Используем 100 потоков — это позволит прогнать 2000+ серверов очень быстро
+    with concurrent.futures.ThreadPoolExecutor(max_workers=100) as executor:
+        futures = [executor.submit(check_ping_fast, item) for item in candidates]
+        for future in concurrent.futures.as_completed(futures):
+            res = future.result()
+            if res: real_alive.append(res)
 
-    # 3. Финальная сортировка по качеству
-    real_alive.sort(key=lambda x: x['score'], reverse=True)
+    print(f"Найдено живых серверов: {len(real_alive)}")
+
+    # 2. ФИНАЛЬНАЯ СОРТИРОВКА:
+    # Главный критерий теперь — ПИНГ (от меньшего к большему).
+    # Если пинг одинаковый, смотрим на технологичность (Vision/Reality).
+    real_alive.sort(key=lambda x: (x['ping'], -x['tech_score']))
 
     if real_alive:
-        # Берем ТОП-30 реально живых и качественных
+        # Берем ТОП-30 самых быстрых из реально живых
         to_save = [x['config'] for x in real_alive[:30]]
         with open(FILE_NAME, "w", encoding="utf-8") as f:
             f.write("\n".join(to_save))
             
         if GID:
             subprocess.run(f'gh gist edit {GID} -f "{FILE_NAME}" {FILE_NAME}', shell=True)
-            print(f"УСПЕХ! В Gist улетели {len(to_save)} живых элитных серверов.")
+            print(f"УСПЕХ! В Gist улетели 30 самых скоростных серверов.")
     else:
-        print("Живых серверов после проверки порта не найдено.")
+        print("Ни один сервер из всех источников не ответил.")
 
 if __name__ == "__main__":
     run()
