@@ -9,7 +9,7 @@ SOURCES = [
         "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/BLACK_VLESS_RUS_mobile.txt"
 ]
 
-BLACK_LIST = ['meshky', '4mohsen', 'white', '708087', 'anycast', 'oneclick', 'ipv6', 'node' '4Jadi' ]
+BLACK_LIST = ['meshky', '4mohsen', 'white', '708087', 'anycast', 'oneclick', 'ipv6', 'node', '4Jadi' ]
 WHITE_DOMAINS = []
 
 def is_garbage(config):
