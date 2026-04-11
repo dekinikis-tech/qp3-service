@@ -5,24 +5,20 @@ FILE_NAME = "vps.txt"
 
 SOURCES = [
     "https://github.com/igareck/vpn-configs-for-russia/blob/main/WHITE-SNI-RU-all.txt",
-    "https://github.com/igareck/vpn-configs-for-russia/blob/main/WHITE-CIDR-RU-checked.txt",
-    "https://github.com/igareck/vpn-configs-for-russia/blob/main/WHITE-CIDR-RU-all.txt",
-    "https://github.com/igareck/vpn-configs-for-russia/blob/main/Vless-Reality-White-Lists-Rus-Mobile.txt",
-    "https://github.com/igareck/vpn-configs-for-russia/blob/main/Vless-Reality-White-Lists-Rus-Mobile-2.txt",
-    "https://raw.githubusercontent.com/V2RayRoot/V2RayConfig/refs/heads/main/Config/vless.txt",
-    "https://raw.githubusercontent.com/AvenCores/goida-vpn-configs/refs/heads/main/githubmirror/26.txt",
-    "https://github.com/luxxuria/harvester/blob/main/non_ru.txt",
-    "https://github.com/luxxuria/harvester/blob/main/ping_tested.txt",
-    "https://github.com/luxxuria/harvester/blob/main/speed_tested.txt",
-    "https://github.com/luxxuria/harvester/blob/main/top_600.txt"
+"https://github.com/igareck/vpn-configs-for-russia/blob/main/WHITE-CIDR-RU-checked.txt",
+"https://github.com/igareck/vpn-configs-for-russia/blob/main/WHITE-CIDR-RU-all.txt",
+"https://github.com/igareck/vpn-configs-for-russia/blob/main/Vless-Reality-White-Lists-Rus-Mobile.txt",
+"https://github.com/igareck/vpn-configs-for-russia/blob/main/Vless-Reality-White-Lists-Rus-Mobile-2.txt",
+"https://raw.githubusercontent.com/V2RayRoot/V2RayConfig/refs/heads/main/Config/vless.txt",
+"https://raw.githubusercontent.com/AvenCores/goida-vpn-configs/refs/heads/main/githubmirror/26.txt"
 ]
 
 BLACK_LIST = ['meshky', '4mohsen', 'white', '708087', 'anycast', 'oneclick', 'ipv6', '4jadi']
 
-def verify_node(config_item):
+def verify_bandwidth(config_item):
     """
-    Пункт 3 твоей методологии: Верификация пропускной способности.
-    Имитируем запрос данных через TLS Handshake.
+    Эмуляция Шага 3: Запрос к ://google.com.
+    Мы проверяем, может ли сервер реально передавать данные.
     """
     try:
         config = config_item["config"]
@@ -34,41 +30,39 @@ def verify_node(config_item):
         context = ssl.create_default_context()
         context.check_hostname = False
         context.verify_mode = ssl.CERT_NONE
-        # Эмуляция современного браузера (uTLS)
+        # Маскировка под Chrome (uTLS)
         context.set_ciphers('ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256')
 
         start = time.time()
-        with socket.create_connection((host, port), timeout=3.0) as sock:
+        with socket.create_connection((host, port), timeout=3.5) as sock:
             with context.wrap_socket(sock, server_hostname=sni) as ssock:
-                # Имитируем запрос к google.com/generate_204 (Пункт 3 твоей методики)
-                # Отправляем минимальный HTTP-заголовок
-                request = f"HEAD /generate_204 HTTP/1.1\r\nHost: {sni}\r\n\r\n"
+                # Имитируем запрос данных (generate_204)
+                # Это заставляет VLESS-сервер реально пропустить трафик через себя
+                request = f"GET /generate_204 HTTP/1.1\r\nHost: {sni}\r\nConnection: close\r\n\r\n"
                 ssock.sendall(request.encode())
                 
-                # Ждем ответ. Если сервер прислал данные - он ЖИВОЙ на 100%
-                ssock.settimeout(1.5)
-                ssock.recv(1)
+                ssock.settimeout(2.0)
+                # Ждем хотя бы 1 байт ответа. Если его нет - прокси мертв.
+                data = ssock.recv(1)
+                if not data: return None
                 
-                ping = int((time.time() - start) * 1000)
-                config_item["ping"] = ping
+                config_item["ping"] = int((time.time() - start) * 1000)
                 return config_item
     except:
         return None
 
-def get_quality_score(config):
-    """Пункт 1 твоей методологии: Валидация параметров"""
+def get_tech_score(config):
+    """Шаг 1: Валидация параметров и технологий"""
     score = 0
     c_low = config.lower()
-    
-    # Приоритет новейшим транспортам (xhttp, grpc)
-    if 'type=xhttp' in c_low or 'type=grpc' in c_low: score += 1000
+    # XTLS Vision и новейшие транспорты - высший приоритет
     if 'xtls-rprx-vision' in c_low: score += 2000
-    if 'security=reality' in c_low: score += 500
-    
+    if 'type=xhttp' in c_low or 'type=httpupgrade' in c_low: score += 1500
+    if 'security=reality' in c_low: score += 1000
     return score
 
 def run():
-    print("--- ЗАПУСК ВЕРИФИКАЦИИ ПО МЕТОДОЛОГИИ ---")
+    print("--- ВЕРИФИКАЦИЯ ПРОПУСКНОЙ СПОСОБНОСТИ ---")
     all_raw = []
     headers = {'User-Agent': 'Mozilla/5.0'}
     
@@ -81,39 +75,41 @@ def run():
     unique = list(set(all_raw))
     candidates = []
     for cfg in unique:
+        # Убираем только явный мусор по именам
         name = urllib.parse.unquote(cfg.split('#')[-1]).lower()
         if any(bad in name for bad in BLACK_LIST) or len(name) < 3:
             continue
             
-        score = get_quality_score(cfg)
+        score = get_tech_score(cfg)
         if score > 0:
             candidates.append({"config": cfg, "score": score})
 
-    # Сортируем лучших кандидатов для теста
+    # Сортируем лучших по технологиям перед тестом
     candidates.sort(key=lambda x: x['score'], reverse=True)
     
-    # Проверяем топ-100 самых перспективных на реальную передачу данных
+    # Берем топ-150 кандидатов и проверяем их на реальную передачу байтов
     real_alive = []
-    with concurrent.futures.ThreadPoolExecutor(max_workers=40) as executor:
-        futures = [executor.submit(verify_node, item) for item in candidates[:100]]
+    print(f"Тестируем передачу данных для {len(candidates[:150])} узлов...")
+    with concurrent.futures.ThreadPoolExecutor(max_workers=50) as executor:
+        futures = [executor.submit(verify_bandwidth, item) for item in candidates[:150]]
         for future in concurrent.futures.as_completed(futures):
             res = future.result()
             if res: real_alive.append(res)
 
-    # Финальная сортировка по пингу (от быстрых к медленным)
+    # Итоговая сортировка по пингу
     real_alive.sort(key=lambda x: x['ping'])
 
     if real_alive:
-        # Берем ТОП-25 самых быстрых из тех, кто прошел верификацию данных
-        to_save = [x['config'] for x in real_alive[:25]]
+        # Оставляем ТОП-30 "бетонных" серверов
+        to_save = [x['config'] for x in real_alive[:30]]
         with open(FILE_NAME, "w", encoding="utf-8") as f:
             f.write("\n".join(to_save))
             
         if GID:
             subprocess.run(f'gh gist edit {GID} -f "{FILE_NAME}" {FILE_NAME}', shell=True)
-            print(f"УСПЕХ! Верификацию прошли {len(real_alive)} серверов. Топ-25 в Gist.")
+            print(f"УСПЕХ! Верификацию прошли {len(real_alive)} серверов. Топ-30 в Gist.")
     else:
-        print("Ни один сервер не прошел верификацию пропускной способности.")
+        print("Ни один сервер не прошел тест передачи данных.")
 
 if __name__ == "__main__":
     run()
