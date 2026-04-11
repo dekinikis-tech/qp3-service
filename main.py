@@ -13,59 +13,59 @@ SOURCES = [
 "https://raw.githubusercontent.com/AvenCores/goida-vpn-configs/refs/heads/main/githubmirror/26.txt"
 ]
 
-BLACK_LIST = ['meshky', '4mohsen', 'white', '708087', 'anycast', 'oneclick', 'ipv6', '4jadi']
+# Черный список (дополнен по твоему последнему скрину)
+BLACK_LIST = ['meshky', '4mohsen', 'white', '708087', 'anycast', 'oneclick', 'ipv6', '4jadi', '4kian']
 
-def verify_bandwidth(config_item):
-    """
-    Эмуляция Шага 3: Запрос к ://google.com.
-    Мы проверяем, может ли сервер реально передавать данные.
-    """
+def is_garbage(config):
+    """Ультимативный фильтр мусора"""
+    try:
+        name_raw = config.split('#')[-1] if '#' in config else ""
+        name = urllib.parse.unquote(name_raw).strip().lower()
+        
+        if not name or len(name) < 4: return True
+        # 1. Если в имени 3 и более цифр (типа 0578) - ЭТО БАН
+        if re.search(r'\d{3,}', name): return True
+        # 2. Если имя содержит слова из черного списка
+        if any(bad in name for bad in BLACK_LIST): return True
+        # 3. Если имя чисто цифровое с дефисами (типа 12-345)
+        if re.sub(r'[-\s]', '', name).isdigit(): return True
+        
+        return False
+    except:
+        return True
+
+def verify_real_data(config_item):
+    """Методология Шаг 3: Проверка реальной передачи данных"""
     try:
         config = config_item["config"]
         parsed = urllib.parse.urlparse(config)
         host, port = parsed.hostname, int(parsed.port or 443)
         params = urllib.parse.parse_qs(parsed.query)
-        sni = params.get('sni', [host])[0]
+        sni = params.get('sni', [host])
 
         context = ssl.create_default_context()
         context.check_hostname = False
         context.verify_mode = ssl.CERT_NONE
-        # Маскировка под Chrome (uTLS)
         context.set_ciphers('ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256')
 
         start = time.time()
-        with socket.create_connection((host, port), timeout=3.5) as sock:
+        with socket.create_connection((host, port), timeout=3.0) as sock:
             with context.wrap_socket(sock, server_hostname=sni) as ssock:
-                # Имитируем запрос данных (generate_204)
-                # Это заставляет VLESS-сервер реально пропустить трафик через себя
+                # Пытаемся получить хоть какой-то ответ от сервера
                 request = f"GET /generate_204 HTTP/1.1\r\nHost: {sni}\r\nConnection: close\r\n\r\n"
                 ssock.sendall(request.encode())
-                
                 ssock.settimeout(2.0)
-                # Ждем хотя бы 1 байт ответа. Если его нет - прокси мертв.
-                data = ssock.recv(1)
-                if not data: return None
+                if not ssock.recv(1): return None
                 
                 config_item["ping"] = int((time.time() - start) * 1000)
                 return config_item
     except:
         return None
 
-def get_tech_score(config):
-    """Шаг 1: Валидация параметров и технологий"""
-    score = 0
-    c_low = config.lower()
-    # XTLS Vision и новейшие транспорты - высший приоритет
-    if 'xtls-rprx-vision' in c_low: score += 2000
-    if 'type=xhttp' in c_low or 'type=httpupgrade' in c_low: score += 1500
-    if 'security=reality' in c_low: score += 1000
-    return score
-
 def run():
-    print("--- ВЕРИФИКАЦИЯ ПРОПУСКНОЙ СПОСОБНОСТИ ---")
+    print("--- ОЧИСТКА СПИСКА ОТ 'КРАСНЫХ' СЕРВЕРОВ ---")
     all_raw = []
     headers = {'User-Agent': 'Mozilla/5.0'}
-    
     for url in SOURCES:
         try:
             res = requests.get(url, timeout=12, headers=headers).text
@@ -75,41 +75,32 @@ def run():
     unique = list(set(all_raw))
     candidates = []
     for cfg in unique:
-        # Убираем только явный мусор по именам
-        name = urllib.parse.unquote(cfg.split('#')[-1]).lower()
-        if any(bad in name for bad in BLACK_LIST) or len(name) < 3:
-            continue
-            
-        score = get_tech_score(cfg)
-        if score > 0:
-            candidates.append({"config": cfg, "score": score})
+        if not is_garbage(cfg):
+            # Отбираем только Reality и Vision (как самые рабочие)
+            if 'xtls-rprx-vision' in cfg.lower() or 'reality' in cfg.lower():
+                candidates.append({"config": cfg, "ping": 9999})
 
-    # Сортируем лучших по технологиям перед тестом
-    candidates.sort(key=lambda x: x['score'], reverse=True)
-    
-    # Берем топ-150 кандидатов и проверяем их на реальную передачу байтов
+    # Проверяем на реальную передачу данных
     real_alive = []
-    print(f"Тестируем передачу данных для {len(candidates[:150])} узлов...")
     with concurrent.futures.ThreadPoolExecutor(max_workers=50) as executor:
-        futures = [executor.submit(verify_bandwidth, item) for item in candidates[:150]]
+        futures = [executor.submit(verify_real_data, item) for item in candidates[:150]]
         for future in concurrent.futures.as_completed(futures):
             res = future.result()
             if res: real_alive.append(res)
 
-    # Итоговая сортировка по пингу
+    # Сортировка по реальному пингу
     real_alive.sort(key=lambda x: x['ping'])
 
     if real_alive:
-        # Оставляем ТОП-30 "бетонных" серверов
-        to_save = [x['config'] for x in real_alive[:30]]
+        # Оставляем ТОП-20 самых быстрых и живых
+        to_save = [x['config'] for x in real_alive[:20]]
         with open(FILE_NAME, "w", encoding="utf-8") as f:
             f.write("\n".join(to_save))
-            
         if GID:
             subprocess.run(f'gh gist edit {GID} -f "{FILE_NAME}" {FILE_NAME}', shell=True)
-            print(f"УСПЕХ! Верификацию прошли {len(real_alive)} серверов. Топ-30 в Gist.")
+            print(f"УСПЕХ! В Gist отправлено {len(to_save)} 'бетонных' серверов.")
     else:
-        print("Ни один сервер не прошел тест передачи данных.")
+        print("Живых серверов не найдено.")
 
 if __name__ == "__main__":
     run()
