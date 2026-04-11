@@ -1,4 +1,4 @@
-юimport requests, os, socket, re, time, subprocess, concurrent.futures, ssl, urllib.parse
+import requests, os, socket, re, time, subprocess, concurrent.futures, ssl, urllib.parse
 
 GID = os.environ.get('MY_GIST_ID')
 FILE_NAME = "vps.txt"
