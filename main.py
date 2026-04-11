@@ -10,7 +10,7 @@ SOURCES = [
 ]
 
 BLACK_LIST = ['meshky', '4mohsen', 'white', '708087', 'anycast', 'oneclick', 'ipv6', 'node' '4Jadi' ]
-WHITE_DOMAINS = ['union.monster', 'tcpnet.fun', 'mutabor-sec.ru', 'whoshere.site', 'deepseek', 'vpnsz.net']
+WHITE_DOMAINS = []
 
 def is_garbage(config):
     try:
