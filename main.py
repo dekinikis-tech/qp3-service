@@ -1,8 +1,8 @@
-import requests, os, re, subprocess, json, time, concurrent.futures, stat, urllib.parse
+import requests, os, re, subprocess, json, time, concurrent.futures, urllib.parse
 
 GID = os.environ.get('MY_GIST_ID')
 FILE_NAME = "vps.txt"
-XRAY_BIN = "./xray" 
+XRAY_BIN = "xray" # После инсталлера он будет в PATH
 
 SOURCES = [
     "https://github.com/igareck/vpn-configs-for-russia/blob/main/WHITE-SNI-RU-all.txt",
@@ -18,28 +18,21 @@ SOURCES = [
 BLACK_LIST = ['meshky', '4mohsen', 'white', '708087', 'anycast', 'oneclick', 'ipv6', '4jadi', '4kian']
 
 def setup_xray():
-    """Скачивание xray без ошибок zipfile"""
-    if not os.path.exists(XRAY_BIN):
-        print("Скачиваю Xray-core через wget...")
-        url = "https://github.com"
-        # Используем системные команды для надежности
-        subprocess.run(f"wget -q -O xray.zip {url}", shell=True)
-        subprocess.run("unzip -q -o xray.zip xray", shell=True)
-        if os.path.exists("xray"):
-            os.chmod(XRAY_BIN, stat.S_IRWXU)
-            print("Xray готов к работе.")
+    """Установка xray через официальный скрипт (самый надежный метод)"""
+    print("Устанавливаю Xray-core...")
+    # Скачиваем и запускаем официальный инсталлер
+    subprocess.run("curl -L https://github.com | sudo bash -s -- install", shell=True)
 
 def test_via_xray(vless_url, port_offset):
-    socks_port = 22000 + port_offset
+    socks_port = 25000 + port_offset
     cfg_file = f"cfg_{socks_port}.json"
     try:
         parsed = urllib.parse.urlparse(vless_url)
         params = urllib.parse.parse_qs(parsed.query)
         
-        # Получаем значения как строки, а не списки
+        # Исправлено: теперь возвращает СТРОКУ, а не список
         def get_p(key, default=""):
-            val = params.get(key, [default])[0]
-            return val
+            return params.get(key, [default])[0]
 
         config_json = {
             "log": {"loglevel": "none"},
@@ -70,8 +63,7 @@ def test_via_xray(vless_url, port_offset):
                 "publicKey": get_p("pbk"),
                 "fingerprint": get_p("fp", "chrome"),
                 "serverName": get_p("sni"),
-                "shortId": get_p("sid"),
-                "spiderX": get_p("spx")
+                "shortId": get_p("sid")
             }
         elif ss["security"] == "tls":
             ss["tlsSettings"] = {"serverName": get_p("sni", parsed.hostname)}
@@ -79,14 +71,14 @@ def test_via_xray(vless_url, port_offset):
         with open(cfg_file, "w") as f:
             json.dump(config_json, f)
         
-        # Запуск Xray
+        # Запуск
         proc = subprocess.Popen([XRAY_BIN, "run", "-c", cfg_file], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        time.sleep(2.5)
+        time.sleep(2.0)
 
         is_ok = False
         try:
             proxies = {"http": f"socks5h://127.0.0.1:{socks_port}", "https": f"socks5h://127.0.0.1:{socks_port}"}
-            # Проверяем доступность реальным запросом
+            # Делаем реальный запрос к Google
             r = requests.get("http://google.com", proxies=proxies, timeout=5)
             if r.status_code == 204:
                 is_ok = True
@@ -118,16 +110,15 @@ def run():
             if not any(bad in name for bad in BLACK_LIST) and not re.search(r'\d{3,}', name):
                 unique.append(c)
 
-    print(f"Кандидатов: {len(unique)}. Проверяем первые 80...")
+    print(f"Кандидатов: {len(unique)}. Начинаю проверку...")
     
     results = []
-    # Используем 10 потоков для стабильности
-    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
-        futures = [executor.submit(test_via_xray, url, i) for i, url in enumerate(unique[:80])]
+    # 15 потоков для стабильности в GitHub Actions
+    with concurrent.futures.ThreadPoolExecutor(max_workers=15) as executor:
+        futures = [executor.submit(test_via_xray, url, i) for i, url in enumerate(unique[:100])]
         for future in concurrent.futures.as_completed(futures):
             res = future.result()
-            if res: 
-                results.append(res)
+            if res: results.append(res)
 
     if results:
         with open(FILE_NAME, "w", encoding="utf-8") as f:
