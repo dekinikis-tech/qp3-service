@@ -1,4 +1,5 @@
 name: VPN Auto Update
+
 on:
   schedule:
     - cron: '0 * * * *'
@@ -18,9 +19,11 @@ jobs:
 
       - name: Install Xray
         run: |
-          # Качаем напрямую с релиза, этот домен не падает
-          wget https://github.com
-          unzip Xray-linux-64.zip xray
+          # Скачиваем архив напрямую, принудительно сохраняя как zip
+          wget -O xray.zip https://github.com
+          # Распаковываем только бинарник xray
+          unzip -o xray.zip xray
+          # Устанавливаем в системный путь
           sudo mv xray /usr/local/bin/xray
           sudo chmod +x /usr/local/bin/xray
           xray version
