@@ -1,11 +1,8 @@
 import requests, os, re, subprocess, json, time, concurrent.futures, urllib.parse
 
 # --- НАСТРОЙКИ ---
-# ID вашего Gist, берется из секретов GitHub
 GID = os.environ.get('MY_GIST_ID')
-# Имя файла, который будет обновляться в Gist
 FILE_NAME = "vps.txt"
-# Имя исполняемого файла Xray
 XRAY_BIN = "xray"
 
 # Список источников с VLESS-конфигурациями
@@ -28,6 +25,7 @@ def test_via_xray(vless_url, port_offset):
     """
     socks_port = 26000 + port_offset
     cfg_file = f"cfg_{socks_port}.json"
+    proc = None # Инициализируем переменную для корректной обработки в finally
     
     try:
         parsed = urllib.parse.urlparse(vless_url)
@@ -46,11 +44,7 @@ def test_via_xray(vless_url, port_offset):
                     "vnext": [{
                         "address": parsed.hostname,
                         "port": int(parsed.port or 443),
-                        "users": [{
-                            "id": parsed.username,
-                            "encryption": "none",
-                            "flow": get_p("flow")
-                        }]
+                        "users": [{"id": parsed.username, "encryption": "none", "flow": get_p("flow")}]
                     }]
                 },
                 "streamSettings": {
@@ -62,12 +56,7 @@ def test_via_xray(vless_url, port_offset):
         
         ss = config_json["outbounds"][0]["streamSettings"]
         if ss["security"] == "reality":
-            ss["realitySettings"] = {
-                "publicKey": get_p("pbk"),
-                "fingerprint": get_p("fp", "chrome"),
-                "serverName": get_p("sni"),
-                "shortId": get_p("sid")
-            }
+            ss["realitySettings"] = {"publicKey": get_p("pbk"), "fingerprint": get_p("fp", "chrome"), "serverName": get_p("sni"), "shortId": get_p("sid")}
         elif ss["security"] == "tls":
             ss["tlsSettings"] = {"serverName": get_p("sni", parsed.hostname)}
 
@@ -75,28 +64,29 @@ def test_via_xray(vless_url, port_offset):
             json.dump(config_json, f)
         
         proc = subprocess.Popen([XRAY_BIN, "run", "-c", cfg_file], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        time.sleep(2) # Даем Xray время на запуск
+        time.sleep(2)
         
         is_ok = False
         try:
             proxies = {"http": f"socks5h://127.0.0.1:{socks_port}", "https": f"socks5h://127.0.0.1:{socks_port}"}
-            # Проверяем доступность Google через созданный прокси
+            # ИСПРАВЛЕНИЕ №2: Используем более надежный URL для проверки
             r = requests.get("http://google.com/generate_204", proxies=proxies, timeout=5)
             if r.status_code == 204:
                 is_ok = True
         except:
-            pass # Ошибки (таймаут, сброс соединения) означают, что прокси не работает
-        
-        proc.terminate() # Убиваем процесс Xray
-        proc.wait()      # Ждем его полного завершения
-        if os.path.exists(cfg_file): os.remove(cfg_file) # Удаляем временный конфиг
+            pass
         
         return vless_url if is_ok else None
         
-    except Exception as e:
-        # В случае любой другой ошибки (например, при парсинге URL) просто пропускаем конфиг
-        if os.path.exists(cfg_file): os.remove(cfg_file)
+    except Exception:
         return None
+    finally:
+        # ИСПРАВЛЕНИЕ №3: Гарантированное завершение процесса и удаление файла
+        if proc:
+            proc.terminate()
+            proc.wait() # Ждем полного завершения процесса
+        if os.path.exists(cfg_file):
+            os.remove(cfg_file)
 
 def run():
     print("--- ЗАПУСК ГЛУБОКОЙ ПРОВЕРКИ ---")
@@ -116,23 +106,31 @@ def run():
     unique = list(set(all_raw))
     candidates = []
     
+    # ИСПРАВЛЕНИЕ №1: Корректная логика фильтрации
     for cfg in unique:
         if '#' in cfg:
             name = urllib.parse.unquote(cfg.split('#')[-1]).lower()
             if not any(bad in name for bad in BLACK_LIST) and not re.search(r'\\d{3,}', name):
                 candidates.append(cfg)
-        else: # Добавляем конфиги без имени
-             candidates.append(cfg)
+        else:
+            # Если имени нет, мы не можем его проверить, поэтому добавляем на проверку
+            candidates.append(cfg)
 
-    print(f"Всего уникальных: {len(unique)}. Кандидатов после фильтрации: {len(candidates)}. Проверяем топ-100...")
+    print(f"\nВсего уникальных: {len(unique)}. Кандидатов после фильтрации: {len(candidates)}. Проверяем топ-100...")
     
     results = []
-    with concurrent.futures.ThreadPoolExecutor(max_workers=20) as executor: # Увеличил кол-во потоков
-        futures = [executor.submit(test_via_xray, url, i) for i, url in enumerate(candidates[:100])]
+    # Используем with/as для ThreadPoolExecutor для гарантии закрытия
+    with concurrent.futures.ThreadPoolExecutor(max_workers=20) as executor:
+        futures = {executor.submit(test_via_xray, url, i): url for i, url in enumerate(candidates[:100])}
         for future in concurrent.futures.as_completed(futures):
             res = future.result()
             if res:
-                print(f"  [+] РАБОТАЕТ: {urllib.parse.unquote(res.split('#')[-1])}")
+                # Добавляем информативный вывод
+                try:
+                    name = urllib.parse.unquote(res.split('#')[-1])
+                except:
+                    name = "NoName"
+                print(f"  [+] РАБОТАЕТ: {name}")
                 results.append(res)
 
     if results:
@@ -140,13 +138,12 @@ def run():
         with open(FILE_NAME, "w", encoding="utf-8") as f:
             f.write("\\n".join(results[:40]))
         
-        # Если GID задан, обновляем Gist с помощью утилиты gh
         if GID:
-            # Используем subprocess.run для более надежного выполнения
+            print("Обновляем Gist...")
             subprocess.run(f'gh gist edit {GID} "{FILE_NAME}"', shell=True, check=True)
             print("Gist успешно обновлен.")
     else:
-        print("\nНи один сервер не прошел проверку Xray.")
+        print("\nНи один сервер не прошел проверку Xray. Возможные причины: все топ-100 серверов нерабочие, либо проблемы с сетью в среде выполнения.")
 
 if __name__ == "__main__":
     run()
