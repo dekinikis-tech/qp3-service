@@ -1,4 +1,4 @@
-import requests, os, re, subprocess, json, time, concurrent.futures, stat, urllib.parse, zipfile
+import requests, os, re, subprocess, json, time, concurrent.futures, stat, urllib.parse
 
 GID = os.environ.get('MY_GIST_ID')
 FILE_NAME = "vps.txt"
@@ -17,24 +17,29 @@ SOURCES = [
 BLACK_LIST = ['meshky', '4mohsen', 'white', '708087', 'anycast', 'oneclick', 'ipv6', '4jadi', '4kian']
 
 def setup_xray():
-    """Скачивание бинарника напрямую без инсталлера"""
+    """Скачивание xray без ошибок zipfile"""
     if not os.path.exists(XRAY_BIN):
-        print("Скачиваю Xray-core...")
+        print("Скачиваю Xray-core через wget...")
         url = "https://github.com"
-        r = requests.get(url)
-        with open("xray.zip", "wb") as f: f.write(r.content)
-        with zipfile.ZipFile("xray.zip", 'r') as zip_ref:
-            zip_ref.extract("xray", ".")
-        os.chmod(XRAY_BIN, stat.S_IRWXU)
+        # Используем системные команды для надежности
+        subprocess.run(f"wget -q -O xray.zip {url}", shell=True)
+        subprocess.run("unzip -q -o xray.zip xray", shell=True)
+        if os.path.exists("xray"):
+            os.chmod(XRAY_BIN, stat.S_IRWXU)
+            print("Xray готов к работе.")
 
 def test_via_xray(vless_url, port_offset):
-    socks_port = 20000 + port_offset
+    socks_port = 22000 + port_offset
     cfg_file = f"cfg_{socks_port}.json"
     try:
         parsed = urllib.parse.urlparse(vless_url)
         params = urllib.parse.parse_qs(parsed.query)
         
-        # Исправленная структура конфига
+        # Получаем значения как строки, а не списки
+        def get_p(key, default=""):
+            val = params.get(key, [default])[0]
+            return val
+
         config_json = {
             "log": {"loglevel": "none"},
             "inbounds": [{"port": socks_port, "protocol": "socks", "settings": {"udp": True}}],
@@ -47,13 +52,13 @@ def test_via_xray(vless_url, port_offset):
                         "users": [{
                             "id": parsed.username,
                             "encryption": "none",
-                            "flow": params.get('flow', [''])[0]
+                            "flow": get_p("flow")
                         }]
                     }]
                 },
                 "streamSettings": {
-                    "network": params.get('type', ['tcp'])[0],
-                    "security": params.get('security', ['none'])[0]
+                    "network": get_p("type", "tcp"),
+                    "security": get_p("security", "none")
                 }
             }]
         }
@@ -61,26 +66,31 @@ def test_via_xray(vless_url, port_offset):
         ss = config_json["outbounds"][0]["streamSettings"]
         if ss["security"] == "reality":
             ss["realitySettings"] = {
-                "publicKey": params.get('pbk', [''])[0],
-                "fingerprint": params.get('fp', ['chrome'])[0],
-                "serverName": params.get('sni', [''])[0],
-                "shortId": params.get('sid', [''])[0]
+                "publicKey": get_p("pbk"),
+                "fingerprint": get_p("fp", "chrome"),
+                "serverName": get_p("sni"),
+                "shortId": get_p("sid"),
+                "spiderX": get_p("spx")
             }
         elif ss["security"] == "tls":
-            ss["tlsSettings"] = {"serverName": params.get('sni', [parsed.hostname])[0]}
+            ss["tlsSettings"] = {"serverName": get_p("sni", parsed.hostname)}
 
-        with open(cfg_file, "w") as f: json.dump(config_json, f)
+        with open(cfg_file, "w") as f:
+            json.dump(config_json, f)
         
+        # Запуск Xray
         proc = subprocess.Popen([XRAY_BIN, "run", "-c", cfg_file], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        time.sleep(2)
+        time.sleep(2.5)
 
         is_ok = False
         try:
-            # Тестируем через прокси
             proxies = {"http": f"socks5h://127.0.0.1:{socks_port}", "https": f"socks5h://127.0.0.1:{socks_port}"}
+            # Проверяем доступность реальным запросом
             r = requests.get("http://google.com", proxies=proxies, timeout=5)
-            if r.status_code == 204: is_ok = True
-        except: pass
+            if r.status_code == 204:
+                is_ok = True
+        except:
+            pass
 
         proc.terminate()
         if os.path.exists(cfg_file): os.remove(cfg_file)
@@ -102,27 +112,30 @@ def run():
 
     unique = []
     for c in list(set(raw_data)):
-        name = urllib.parse.unquote(c.split('#')[-1]).lower()
-        if not any(bad in name for bad in BLACK_LIST) and not re.search(r'\d{3,}', name):
-            unique.append(c)
+        if '#' in c:
+            name = urllib.parse.unquote(c.split('#')[-1]).lower()
+            if not any(bad in name for bad in BLACK_LIST) and not re.search(r'\d{3,}', name):
+                unique.append(c)
 
-    print(f"Кандидатов: {len(unique)}. Проверяем первые 100...")
+    print(f"Кандидатов: {len(unique)}. Проверяем первые 80...")
     
     results = []
+    # Используем 10 потоков для стабильности
     with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
-        futures = [executor.submit(test_via_xray, url, i) for i, url in enumerate(unique[:100])]
+        futures = [executor.submit(test_via_xray, url, i) for i, url in enumerate(unique[:80])]
         for future in concurrent.futures.as_completed(futures):
             res = future.result()
-            if res: results.append(res)
+            if res: 
+                results.append(res)
 
     if results:
         with open(FILE_NAME, "w", encoding="utf-8") as f:
-            f.write("\n".join(results[:30]))
+            f.write("\n".join(results[:40]))
         if GID:
             subprocess.run(f'gh gist edit {GID} -f "{FILE_NAME}" {FILE_NAME}', shell=True)
-            print(f"УСПЕХ! Рабочих: {len(results)}")
+            print(f"УСПЕХ! Реально рабочих: {len(results)}")
     else:
-        print("Рабочих серверов не найдено.")
+        print("Ни один сервер не прошел проверку через Xray.")
 
 if __name__ == "__main__":
     run()
