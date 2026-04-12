@@ -1,8 +1,8 @@
-import requests, os, re, subprocess, json, time, concurrent.futures, stat, urllib.parse
+import requests, os, re, subprocess, json, time, concurrent.futures, stat, urllib.parse, zipfile
 
 GID = os.environ.get('MY_GIST_ID')
 FILE_NAME = "vps.txt"
-XRAY_BIN = "/usr/local/bin/xray" # Стандартный путь после установки
+XRAY_BIN = "./xray" 
 
 SOURCES = [
     "https://github.com/igareck/vpn-configs-for-russia/blob/main/WHITE-SNI-RU-all.txt",
@@ -17,20 +17,24 @@ SOURCES = [
 BLACK_LIST = ['meshky', '4mohsen', 'white', '708087', 'anycast', 'oneclick', 'ipv6', '4jadi', '4kian']
 
 def setup_xray():
-    """Установка Xray через официальный инсталлер"""
+    """Скачивание бинарника напрямую без инсталлера"""
     if not os.path.exists(XRAY_BIN):
-        print("Устанавливаю Xray-core...")
-        # Используем официальный скрипт установки
-        cmd = "bash -c \"$(curl -L https://github.com)\" @ install"
-        subprocess.run(cmd, shell=True)
+        print("Скачиваю Xray-core...")
+        url = "https://github.com"
+        r = requests.get(url)
+        with open("xray.zip", "wb") as f: f.write(r.content)
+        with zipfile.ZipFile("xray.zip", 'r') as zip_ref:
+            zip_ref.extract("xray", ".")
+        os.chmod(XRAY_BIN, stat.S_IRWXU)
 
 def test_via_xray(vless_url, port_offset):
     socks_port = 20000 + port_offset
+    cfg_file = f"cfg_{socks_port}.json"
     try:
         parsed = urllib.parse.urlparse(vless_url)
         params = urllib.parse.parse_qs(parsed.query)
         
-        # Создаем конфиг для Xray
+        # Исправленная структура конфига
         config_json = {
             "log": {"loglevel": "none"},
             "inbounds": [{"port": socks_port, "protocol": "socks", "settings": {"udp": True}}],
@@ -54,41 +58,35 @@ def test_via_xray(vless_url, port_offset):
             }]
         }
 
-        # Настройка Reality / TLS
         ss = config_json["outbounds"][0]["streamSettings"]
         if ss["security"] == "reality":
             ss["realitySettings"] = {
                 "publicKey": params.get('pbk', [''])[0],
                 "fingerprint": params.get('fp', ['chrome'])[0],
                 "serverName": params.get('sni', [''])[0],
-                "shortId": params.get('sid', [''])[0],
-                "spiderX": params.get('spx', [''])[0]
+                "shortId": params.get('sid', [''])[0]
             }
         elif ss["security"] == "tls":
             ss["tlsSettings"] = {"serverName": params.get('sni', [parsed.hostname])[0]}
 
-        cfg_file = f"cfg_{socks_port}.json"
         with open(cfg_file, "w") as f: json.dump(config_json, f)
         
-        # Запуск Xray
         proc = subprocess.Popen([XRAY_BIN, "run", "-c", cfg_file], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        time.sleep(2) # Время на запуск и установку соединения
+        time.sleep(2)
 
-        # Проверка через SOCKS5
         is_ok = False
         try:
+            # Тестируем через прокси
             proxies = {"http": f"socks5h://127.0.0.1:{socks_port}", "https": f"socks5h://127.0.0.1:{socks_port}"}
-            # Проверяем доступность Google
-            r = requests.get("http://google.com", proxies=proxies, timeout=4)
-            if r.status_code == 204:
-                is_ok = True
-        except:
-            pass
+            r = requests.get("http://google.com", proxies=proxies, timeout=5)
+            if r.status_code == 204: is_ok = True
+        except: pass
 
         proc.terminate()
         if os.path.exists(cfg_file): os.remove(cfg_file)
         return vless_url if is_ok else None
     except:
+        if os.path.exists(cfg_file): os.remove(cfg_file)
         return None
 
 def run():
@@ -108,25 +106,23 @@ def run():
         if not any(bad in name for bad in BLACK_LIST) and not re.search(r'\d{3,}', name):
             unique.append(c)
 
-    print(f"Кандидатов после фильтра: {len(unique)}. Начинаю Xray-тест...")
+    print(f"Кандидатов: {len(unique)}. Проверяем первые 100...")
     
     results = []
-    # 15 потоков, чтобы не перегружать CPU в Actions
-    with concurrent.futures.ThreadPoolExecutor(max_workers=15) as executor:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
         futures = [executor.submit(test_via_xray, url, i) for i, url in enumerate(unique[:100])]
         for future in concurrent.futures.as_completed(futures):
             res = future.result()
             if res: results.append(res)
 
     if results:
-        # Сортируем (те, что прошли тест, уже считаются хорошими)
         with open(FILE_NAME, "w", encoding="utf-8") as f:
             f.write("\n".join(results[:30]))
         if GID:
             subprocess.run(f'gh gist edit {GID} -f "{FILE_NAME}" {FILE_NAME}', shell=True)
-            print(f"УСПЕХ! Реально рабочих: {len(results)}")
+            print(f"УСПЕХ! Рабочих: {len(results)}")
     else:
-        print("Ни один сервер не прошел проверку через Xray.")
+        print("Рабочих серверов не найдено.")
 
 if __name__ == "__main__":
     run()
