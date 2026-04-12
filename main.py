@@ -2,7 +2,7 @@ import requests, os, re, subprocess, json, time, concurrent.futures, urllib.pars
 
 GID = os.environ.get('MY_GIST_ID')
 FILE_NAME = "vps.txt"
-XRAY_BIN = "xray" # Установленный системно
+XRAY_BIN = "xray"
 
 SOURCES = [
     "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/WHITE-SNI-RU-all.txt",
@@ -17,16 +17,16 @@ SOURCES = [
 BLACK_LIST = ['meshky', '4mohsen', 'white', '708087', 'anycast', 'oneclick', 'ipv6', '4jadi', '4kian']
 
 def test_via_xray(vless_url, port_offset):
-    socks_port = 30000 + port_offset
+    socks_port = 26000 + port_offset
     cfg_file = f"cfg_{socks_port}.json"
     try:
         parsed = urllib.parse.urlparse(vless_url)
         params = urllib.parse.parse_qs(parsed.query)
         
-        # КРИТИЧЕСКИЙ ФИКС: возвращаем строку, а не список
+        # КРИТИЧЕСКИЙ ФИКС: Xray требует СТРОКУ, а не список ['val']
         def get_p(key, default=""):
-            val = params.get(key, [default])
-            return val[0] if isinstance(val, list) else val
+            v = params.get(key, [default])[0]
+            return v
 
         config_json = {
             "log": {"loglevel": "none"},
@@ -65,14 +65,12 @@ def test_via_xray(vless_url, port_offset):
         with open(cfg_file, "w") as f:
             json.dump(config_json, f)
         
-        # Запуск Xray
         proc = subprocess.Popen([XRAY_BIN, "run", "-c", cfg_file], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        time.sleep(2.0)
+        time.sleep(2)
 
         is_ok = False
         try:
             proxies = {"http": f"socks5h://127.0.0.1:{socks_port}", "https": f"socks5h://127.0.0.1:{socks_port}"}
-            # Проверяем доступность Google
             r = requests.get("http://google.com", proxies=proxies, timeout=5)
             if r.status_code == 204: is_ok = True
         except: pass
@@ -81,31 +79,27 @@ def test_via_xray(vless_url, port_offset):
         if os.path.exists(cfg_file): os.remove(cfg_file)
         return vless_url if is_ok else None
     except:
-        if os.path.exists(cfg_file): os.remove(cfg_file)
         return None
 
 def run():
-    print("--- ЗАПУСК ПРОВЕРКИ ---")
+    print("--- СБОР И ГЛУБОКИЙ ТЕСТ ---")
     all_raw = []
     headers = {'User-Agent': 'Mozilla/5.0'}
     for url in SOURCES:
         try:
             res = requests.get(url, timeout=15, headers=headers).text
             found = re.findall(r'vless://[^\s\'"<>]+', res)
-            print(f"Источник: {url[:40]}... | Найдено: {len(found)}")
+            print(f"Источник: {url[:35]}... | Найдено: {len(found)}")
             all_raw.extend(found)
         except: continue
 
     unique = list(set(all_raw))
     candidates = []
     for cfg in unique:
-        if '#' in cfg:
-            name = urllib.parse.unquote(cfg.split('#')[-1]).lower()
-            if not any(bad in name for bad in BLACK_LIST) and not re.search(r'\d{3,}', name):
-                candidates.append(cfg)
+        name = urllib.parse.unquote(cfg.split('#')[-1]).lower() if '#' in cfg else ""
+        if not any(bad in name for bad in BLACK_LIST) and not re.search(r'\d{3,}', name):
+            candidates.append(cfg)
 
-    print(f"Кандидатов: {len(candidates)}. Тестируем топ-100...")
-    
     results = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=15) as executor:
         futures = [executor.submit(test_via_xray, url, i) for i, url in enumerate(candidates[:100])]
@@ -120,7 +114,7 @@ def run():
             subprocess.run(f'gh gist edit {GID} -f "{FILE_NAME}" {FILE_NAME}', shell=True)
             print(f"УСПЕХ! Найдено рабочих: {len(results)}")
     else:
-        print("Рабочих серверов не найдено.")
+        print("Ни один сервер не прошел проверку Xray.")
 
 if __name__ == "__main__":
     run()
