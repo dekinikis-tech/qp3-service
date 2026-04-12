@@ -5,21 +5,16 @@ GID = os.environ.get('MY_GIST_ID')
 FILE_NAME = "vps.txt"
 XRAY_BIN = "xray"
 
-# Оставили только две надежные базы
 SOURCES = [
     "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/Vless-Reality-White-Lists-Rus-Mobile.txt",
     "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/Vless-Reality-White-Lists-Rus-Mobile-2.txt"
 ]
 
-# Обновленный черный список: добавили домены-обманки (yandex.net, vk-apps.com)
+# Оставляем умные фильтры от Яндекса и ВК
 BLACK_LIST = ['meshky', '4mohsen', 'white', '708087', 'anycast', 'oneclick', 'ipv6', '4jadi', '4kian', 'yandex.net', 'vk-apps.com']
-
-# Обновленный список IP: добавили подсети Yandex Cloud (158.160., 51.250., 84.201.)
 BLOCKED_IPS = ('104.', '172.64.', '172.65.', '172.66.', '172.67.', '188.114.', '162.159.', '108.162.', '158.160.', '51.250.', '84.201.')
-
 VLESS_REGEX = re.compile(r"vless://(?P<uuid>[^@]+)@(?P<host>[^:?#]+):(?P<port>\d+)\??(?P<query>[^#]+)?#?(?P<name>.*)?")
 
-# 10 потоков для стабильности на слабых машинах GitHub Actions
 MAX_WORKERS = 10 
 port_queue = queue.Queue()
 for p in range(25000, 25000 + MAX_WORKERS):
@@ -35,7 +30,6 @@ def test_via_xray(vless_url):
         data = match.groupdict()
         address, server_port = data['host'], int(data['port'])
         
-        # Фильтр по IP
         if address.startswith(BLOCKED_IPS): return None
         if ':' in address: return None 
             
@@ -83,27 +77,17 @@ def test_via_xray(vless_url):
         session = requests.Session()
         session.trust_env = False
         
-        # 🔥 ПАРАНОИДАЛЬНАЯ ПРОВЕРКА (DOUBLE-TAP HTTPS)
-        # Проверка 1: Разогрев и проверка TLS-рукопожатия (Таймаут 2.5 сек)
-        r1 = session.get("https://www.gstatic.com/generate_204", proxies=proxies, timeout=2.5)
-        if r1.status_code != 204:
-            return None
-            
-        time.sleep(0.3) # Имитация задержки реального устройства
-        
         t1 = time.perf_counter()
         
-        # Проверка 2: Контрольный замер через Google (Таймаут 2.0 сек)
-        r2 = session.get("https://www.google.com/generate_204", proxies=proxies, timeout=2.0)
+        # 🔥 ВОЗВРАЩАЕМ МЯГКУЮ ПРОВЕРКУ (1 запрос, таймаут 5 сек, не ломаем медленные сервера)
+        r1 = session.get("http://www.gstatic.com/generate_204", proxies=proxies, timeout=5.0)
         
-        if r2.status_code == 204:
+        if r1.status_code == 204:
             ping = int((time.perf_counter() - t1) * 1000)
             return (vless_url, ping)
-        else:
-            return None
             
     except Exception: 
-        return None # Любой разрыв связи или таймаут бракует сервер
+        return None
     finally:
         if proc:
             try: 
@@ -116,7 +100,7 @@ def test_via_xray(vless_url):
         port_queue.put(port)
 
 def run():
-    print("--- ЗАПУСК ПРОВЕРКИ (v21: Финальный умный фильтр) ---")
+    print("--- ЗАПУСК ПРОВЕРКИ (v22: Мягкий пинг + Умный фильтр Яндекса) ---")
     all_raw, headers = [], {'User-Agent': 'Mozilla/5.0'}
     for url in SOURCES:
         try:
@@ -124,8 +108,7 @@ def run():
             all_raw.extend(re.findall(r'vless://[^\s\'"<>]+', res))
         except: pass
             
-    # 🔥 НОВАЯ ЛОГИКА ФИЛЬТРАЦИИ
-    # Теперь мы ищем слова из BLACK_LIST во всей ссылке (включая SNI), а не только в названии
+    # 🔥 Оставляем фильтрацию по всей ссылке, чтобы ловить мусор
     unique = list(set(all_raw))
     candidates = []
     for cfg in unique:
@@ -133,7 +116,7 @@ def run():
         if not any(bad in decoded_cfg for bad in BLACK_LIST): 
             candidates.append(cfg)
         
-    print(f"\nСобрано серверов после очистки от мусора: {len(candidates)}.")
+    print(f"\nСобрано серверов: {len(candidates)}.")
     
     results = []
     tested_count = 0
@@ -151,7 +134,7 @@ def run():
         results.sort(key=lambda x: x[1])
         final_urls = [r[0] for r in results]
         
-        print(f"\nИТОГ: Из {len(candidates)} серверов жесткую проверку прошли: {len(final_urls)}.")
+        print(f"\nИТОГ: Из {len(candidates)} серверов проверку прошли: {len(final_urls)}.")
         
         with open(FILE_NAME, "w", encoding="utf-8") as f:
             f.write("\n".join(final_urls[:50]))
@@ -161,7 +144,7 @@ def run():
             subprocess.run(f'gh gist edit {GID} -f "{FILE_NAME}" {FILE_NAME}', shell=True)
             print("Gist обновлен.")
     else:
-        print("\nНи один сервер не прошел параноидальную проверку.")
+        print("\nНет рабочих серверов.")
 
 if __name__ == "__main__":
     run()
