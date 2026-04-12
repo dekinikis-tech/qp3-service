@@ -1,7 +1,9 @@
-import requests, os, re, subprocess, urllib.parse, socket, concurrent.futures, time, ssl
+import requests, os, re, subprocess, json, time, concurrent.futures, stat
 
 GID = os.environ.get('MY_GIST_ID')
 FILE_NAME = "vps.txt"
+XRAY_BIN = "./xray"
+XRAY_URL = "https://github.com"
 
 SOURCES = [
     "https://github.com/igareck/vpn-configs-for-russia/blob/main/WHITE-SNI-RU-all.txt",
@@ -13,94 +15,120 @@ SOURCES = [
 "https://raw.githubusercontent.com/AvenCores/goida-vpn-configs/refs/heads/main/githubmirror/26.txt"
 ]
 
-# Черный список (дополнен по твоему последнему скрину)
 BLACK_LIST = ['meshky', '4mohsen', 'white', '708087', 'anycast', 'oneclick', 'ipv6', '4jadi', '4kian']
 
-def is_garbage(config):
-    """Ультимативный фильтр мусора"""
-    try:
-        name_raw = config.split('#')[-1] if '#' in config else ""
-        name = urllib.parse.unquote(name_raw).strip().lower()
-        
-        if not name or len(name) < 4: return True
-        # 1. Если в имени 3 и более цифр (типа 0578) - ЭТО БАН
-        if re.search(r'\d{3,}', name): return True
-        # 2. Если имя содержит слова из черного списка
-        if any(bad in name for bad in BLACK_LIST): return True
-        # 3. Если имя чисто цифровое с дефисами (типа 12-345)
-        if re.sub(r'[-\s]', '', name).isdigit(): return True
-        
-        return False
-    except:
-        return True
+def setup_xray():
+    """Скачивание и подготовка xray-core"""
+    if not os.path.exists(XRAY_BIN):
+        print("Скачиваю Xray...")
+        r = requests.get(XRAY_URL)
+        with open("xray.zip", "wb") as f: f.write(r.content)
+        subprocess.run("unzip -o xray.zip xray", shell=True)
+        os.chmod(XRAY_BIN, stat.S_IRWXU)
 
-def verify_real_data(config_item):
-    """Методология Шаг 3: Проверка реальной передачи данных"""
+def test_via_xray(vless_url, port_offset):
+    """Реальная проверка через xray-core"""
+    socks_port = 20000 + port_offset
+    config_json = {
+        "log": {"loglevel": "none"},
+        "inbounds": [{"port": socks_port, "protocol": "socks", "settings": {"udp": True}}],
+        "outbounds": [{
+            "protocol": "vless",
+            "settings": {
+                "vnext": [{
+                    "address": "", # Будет заполнено парсером
+                    "port": 443,
+                    "users": [{"id": "", "encryption": "none", "flow": ""}]
+                }]
+            },
+            "streamSettings": {"network": "tcp", "security": "none"}
+        }]
+    }
+
     try:
-        config = config_item["config"]
-        parsed = urllib.parse.urlparse(config)
-        host, port = parsed.hostname, int(parsed.port or 443)
+        # Упрощенный парсинг для теста
+        import urllib.parse
+        parsed = urllib.parse.urlparse(vless_url)
         params = urllib.parse.parse_qs(parsed.query)
-        sni = params.get('sni', [host])
+        
+        # Настройка аутбаунда под конкретный конфиг
+        out = config_json["outbounds"][0]
+        out["settings"]["vnext"][0]["address"] = parsed.hostname
+        out["settings"]["vnext"][0]["port"] = int(parsed.port or 443)
+        out["settings"]["vnext"][0]["users"][0]["id"] = parsed.username
+        out["settings"]["vnext"][0]["users"][0]["flow"] = params.get('flow', [''])[0]
+        
+        out["streamSettings"]["security"] = params.get('security', ['none'])[0]
+        out["streamSettings"]["network"] = params.get('type', ['tcp'])[0]
+        
+        reality_settings = {
+            "publicKey": params.get('pbk', [''])[0],
+            "fingerprint": params.get('fp', ['chrome'])[0],
+            "serverName": params.get('sni', [''])[0],
+            "shortId": params.get('sid', [''])[0],
+            "spiderX": params.get('spx', [''])[0]
+        }
+        if out["streamSettings"]["security"] == "reality":
+            out["streamSettings"]["realitySettings"] = reality_settings
+        elif out["streamSettings"]["security"] == "tls":
+            out["streamSettings"]["tlsSettings"] = {"serverName": reality_settings["serverName"]}
 
-        context = ssl.create_default_context()
-        context.check_hostname = False
-        context.verify_mode = ssl.CERT_NONE
-        context.set_ciphers('ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256')
+        # Запуск Xray
+        cfg_file = f"cfg_{socks_port}.json"
+        with open(cfg_file, "w") as f: json.dump(config_json, f)
+        
+        proc = subprocess.Popen([XRAY_BIN, "-c", cfg_file], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        time.sleep(1.5) # Даем время на запуск
 
-        start = time.time()
-        with socket.create_connection((host, port), timeout=3.0) as sock:
-            with context.wrap_socket(sock, server_hostname=sni) as ssock:
-                # Пытаемся получить хоть какой-то ответ от сервера
-                request = f"GET /generate_204 HTTP/1.1\r\nHost: {sni}\r\nConnection: close\r\n\r\n"
-                ssock.sendall(request.encode())
-                ssock.settimeout(2.0)
-                if not ssock.recv(1): return None
-                
-                config_item["ping"] = int((time.time() - start) * 1000)
-                return config_item
+        # Тест пропускной способности (generate_204)
+        try:
+            proxies = {"http": f"socks5://127.0.0.1:{socks_port}", "https": f"socks5://127.0.0.1:{socks_port}"}
+            r = requests.get("http://google.com", proxies=proxies, timeout=3)
+            is_ok = (r.status_code == 204)
+        except:
+            is_ok = False
+
+        proc.terminate()
+        os.remove(cfg_file)
+        return vless_url if is_ok else None
     except:
         return None
 
 def run():
-    print("--- ОЧИСТКА СПИСКА ОТ 'КРАСНЫХ' СЕРВЕРОВ ---")
-    all_raw = []
-    headers = {'User-Agent': 'Mozilla/5.0'}
+    setup_xray()
+    print("--- СБОР И ТЕСТ ЧЕРЕЗ XRAY-CORE ---")
+    raw_data = []
     for url in SOURCES:
         try:
-            res = requests.get(url, timeout=12, headers=headers).text
-            all_raw.extend(re.findall(r'vless://[^\s\'"<>]+', res))
+            res = requests.get(url, timeout=10).text
+            raw_data.extend(re.findall(r'vless://[^\s\'"<>]+', res))
         except: continue
 
-    unique = list(set(all_raw))
-    candidates = []
-    for cfg in unique:
-        if not is_garbage(cfg):
-            # Отбираем только Reality и Vision (как самые рабочие)
-            if 'xtls-rprx-vision' in cfg.lower() or 'reality' in cfg.lower():
-                candidates.append({"config": cfg, "ping": 9999})
+    # Фильтр мусора по именам
+    unique = []
+    for c in list(set(raw_data)):
+        name = c.split('#')[-1].lower()
+        if not any(bad in name for bad in BLACK_LIST) and not re.search(r'\d{3,}', name):
+            unique.append(c)
 
-    # Проверяем на реальную передачу данных
-    real_alive = []
-    with concurrent.futures.ThreadPoolExecutor(max_workers=50) as executor:
-        futures = [executor.submit(verify_real_data, item) for item in candidates[:150]]
+    print(f"Кандидатов: {len(unique)}. Начинаю проверку...")
+    
+    results = []
+    # Используем 20 потоков, так как запуск xray ресурсозатратен
+    with concurrent.futures.ThreadPoolExecutor(max_workers=20) as executor:
+        futures = [executor.submit(test_via_xray, url, i) for i, url in enumerate(unique[:100])]
         for future in concurrent.futures.as_completed(futures):
             res = future.result()
-            if res: real_alive.append(res)
+            if res: results.append(res)
 
-    # Сортировка по реальному пингу
-    real_alive.sort(key=lambda x: x['ping'])
-
-    if real_alive:
-        # Оставляем ТОП-20 самых быстрых и живых
-        to_save = [x['config'] for x in real_alive[:20]]
+    if results:
         with open(FILE_NAME, "w", encoding="utf-8") as f:
-            f.write("\n".join(to_save))
+            f.write("\n".join(results[:30]))
         if GID:
             subprocess.run(f'gh gist edit {GID} -f "{FILE_NAME}" {FILE_NAME}', shell=True)
-            print(f"УСПЕХ! В Gist отправлено {len(to_save)} 'бетонных' серверов.")
+            print(f"УСПЕХ! Найдено реально рабочих: {len(results)}")
     else:
-        print("Живых серверов не найдено.")
+        print("Рабочих серверов не найдено.")
 
 if __name__ == "__main__":
     run()
