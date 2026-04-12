@@ -1,25 +1,37 @@
 name: VPN Auto Update
+
 on:
   schedule:
-    - cron: '0 * * * *'
-  workflow_dispatch:
+    - cron: '0 * * * *' # Запуск каждый час
+  workflow_dispatch: # Кнопка для ручного запуска
 
 jobs:
   update_gist:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
-      - uses: actions/setup-python@v4
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
         with:
           python-version: '3.9'
-      
-      - name: Install Xray
-        # Официальный скрипт установки, работающий в среде Ubuntu
-        run: curl -L https://github.com | sudo bash -s -- install
 
-      - run: pip install requests
-      - name: Run script
+      - name: Install Xray-core
+        run: |
+          # Скачиваем официальный скрипт установки XTLS (прямая ссылка на raw)
+          curl -L https://githubusercontent.com -o install.sh
+          # Устанавливаем xray системно
+          sudo bash install.sh install
+          # Проверяем, что xray установился
+          xray version
+
+      - name: Install Python dependencies
+        run: pip install requests
+
+      - name: Run main script
         env:
+          # Твои секреты из настроек репозитория
           GH_TOKEN: ${{ secrets.GIST_TOKEN }}
           MY_GIST_ID: ${{ secrets.MY_GIST_ID }}
         run: python main.py
