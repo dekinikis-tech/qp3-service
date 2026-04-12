@@ -12,6 +12,11 @@ jobs:
       - uses: actions/setup-python@v4
         with:
           python-version: '3.9'
+      
+      - name: Install Xray
+        # Официальный скрипт установки, работающий в среде Ubuntu
+        run: curl -L https://github.com | sudo bash -s -- install
+
       - run: pip install requests
       - name: Run script
         env:
