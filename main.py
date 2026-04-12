@@ -5,16 +5,21 @@ GID = os.environ.get('MY_GIST_ID')
 FILE_NAME = "vps.txt"
 XRAY_BIN = "xray"
 
-# Оставили только две рабочие ссылки
+# Оставили только две надежные базы
 SOURCES = [
     "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/Vless-Reality-White-Lists-Rus-Mobile.txt",
     "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/Vless-Reality-White-Lists-Rus-Mobile-2.txt"
 ]
 
-BLACK_LIST = ['meshky', '4mohsen', 'white', '708087', 'anycast', 'oneclick', 'ipv6', '4jadi', '4kian']
-BLOCKED_IPS = ('104.', '172.64.', '172.65.', '172.66.', '172.67.', '188.114.', '162.159.', '108.162.')
+# Обновленный черный список: добавили домены-обманки (yandex.net, vk-apps.com)
+BLACK_LIST = ['meshky', '4mohsen', 'white', '708087', 'anycast', 'oneclick', 'ipv6', '4jadi', '4kian', 'yandex.net', 'vk-apps.com']
+
+# Обновленный список IP: добавили подсети Yandex Cloud (158.160., 51.250., 84.201.)
+BLOCKED_IPS = ('104.', '172.64.', '172.65.', '172.66.', '172.67.', '188.114.', '162.159.', '108.162.', '158.160.', '51.250.', '84.201.')
+
 VLESS_REGEX = re.compile(r"vless://(?P<uuid>[^@]+)@(?P<host>[^:?#]+):(?P<port>\d+)\??(?P<query>[^#]+)?#?(?P<name>.*)?")
 
+# 10 потоков для стабильности на слабых машинах GitHub Actions
 MAX_WORKERS = 10 
 port_queue = queue.Queue()
 for p in range(25000, 25000 + MAX_WORKERS):
@@ -30,6 +35,7 @@ def test_via_xray(vless_url):
         data = match.groupdict()
         address, server_port = data['host'], int(data['port'])
         
+        # Фильтр по IP
         if address.startswith(BLOCKED_IPS): return None
         if ':' in address: return None 
             
@@ -110,7 +116,7 @@ def test_via_xray(vless_url):
         port_queue.put(port)
 
 def run():
-    print("--- ЗАПУСК ПРОВЕРКИ (v20: Параноидальный режим Double-Tap) ---")
+    print("--- ЗАПУСК ПРОВЕРКИ (v21: Финальный умный фильтр) ---")
     all_raw, headers = [], {'User-Agent': 'Mozilla/5.0'}
     for url in SOURCES:
         try:
@@ -118,15 +124,16 @@ def run():
             all_raw.extend(re.findall(r'vless://[^\s\'"<>]+', res))
         except: pass
             
+    # 🔥 НОВАЯ ЛОГИКА ФИЛЬТРАЦИИ
+    # Теперь мы ищем слова из BLACK_LIST во всей ссылке (включая SNI), а не только в названии
     unique = list(set(all_raw))
     candidates = []
     for cfg in unique:
-        if '#' in cfg:
-            name = urllib.parse.unquote(cfg.split('#')[-1]).lower()
-            if not any(bad in name for bad in BLACK_LIST): candidates.append(cfg)
-        else: candidates.append(cfg)
+        decoded_cfg = urllib.parse.unquote(cfg).lower()
+        if not any(bad in decoded_cfg for bad in BLACK_LIST): 
+            candidates.append(cfg)
         
-    print(f"\nСобрано серверов: {len(candidates)}.")
+    print(f"\nСобрано серверов после очистки от мусора: {len(candidates)}.")
     
     results = []
     tested_count = 0
