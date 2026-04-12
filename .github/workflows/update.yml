@@ -17,18 +17,27 @@ jobs:
         with:
           python-version: '3.9'
 
+      # --- ИСПРАВЛЕННЫЙ БЛОК: ИСПОЛЬЗУЕМ JQ ДЛЯ НАДЕЖНОСТИ ---
       - name: Install Xray
         run: |
-          LATEST_URL=$(curl -s "https://api.github.com/repos/XTLS/Xray-core/releases/latest" | grep "browser_download_url" | grep "linux-64.zip\"" | cut -d '"' -f 4)
+          # 1. Используем jq для надежного извлечения URL из ответа GitHub API
+          LATEST_URL=$(curl -s "https://api.github.com/repos/XTLS/Xray-core/releases/latest" | jq -r '.assets[] | select(.name == "Xray-linux-64.zip") | .browser_download_url')
+          
+          # 2. Скачиваем архив
           echo "Downloading Xray from: $LATEST_URL"
           wget -O xray.zip "$LATEST_URL"
+          
+          # 3. Распаковываем исполняемый файл xray
           unzip -o xray.zip xray
+          
+          # 4. Перемещаем в системную директорию и делаем исполняемым
           sudo mv xray /usr/local/bin/xray
           sudo chmod +x /usr/local/bin/xray
+          
+          # 5. Проверяем версию
           echo "Xray installed successfully:"
           xray version
 
-      # --- ИСПРАВЛЕННЫЙ БЛОК ---
       - name: Install Python dependencies
         run: pip install "requests[socks]"
 
