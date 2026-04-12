@@ -1,8 +1,8 @@
-import requests, os, re, subprocess, json, time, concurrent.futures, urllib.parse
+import requests, os, re, subprocess, json, time, concurrent.futures, urllib.parse, zipfile, stat
 
 GID = os.environ.get('MY_GIST_ID')
 FILE_NAME = "vps.txt"
-XRAY_BIN = "xray" # Теперь будет в системе
+XRAY_BIN = "./xray" 
 
 SOURCES = [
     "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/WHITE-SNI-RU-all.txt",
@@ -17,23 +17,33 @@ SOURCES = [
 BLACK_LIST = ['meshky', '4mohsen', 'white', '708087', 'anycast', 'oneclick', 'ipv6', '4jadi', '4kian']
 
 def setup_xray():
-    """Установка Xray через официальный скрипт XTLS"""
-    print("Устанавливаю Xray-core в систему...")
-    cmd = "curl -L https://github.com | sudo bash -s -- install"
-    subprocess.run(cmd, shell=True)
+    """Надежная установка Xray без использования внешних bash-скриптов"""
+    if not os.path.exists(XRAY_BIN):
+        print("Загрузка Xray-core...")
+        url = "https://github.com"
+        try:
+            r = requests.get(url, timeout=30)
+            with open("xray.zip", "wb") as f:
+                f.write(r.content)
+            with zipfile.ZipFile("xray.zip", "r") as zip_ref:
+                zip_ref.extract("xray", ".")
+            os.chmod(XRAY_BIN, stat.S_IRWXU)
+            print("Xray успешно подготовлен.")
+        except Exception as e:
+            print(f"Ошибка установки Xray: {e}")
 
 def test_via_xray(vless_url, port_offset):
-    socks_port = 26000 + port_offset
+    socks_port = 30000 + port_offset
     cfg_file = f"cfg_{socks_port}.json"
     try:
         parsed = urllib.parse.urlparse(vless_url)
         params = urllib.parse.parse_qs(parsed.query)
         
-        # Получаем ПЕРВОЕ значение из списка (строку)
+        # ГАРАНТИРУЕМ получение СТРОКИ, а не списка
         def get_p(key, default=""):
-            return params.get(key, [default])[0]
+            val = params.get(key, [default])
+            return val[0] if isinstance(val, list) else val
 
-        # Конфиг, который xray точно поймет
         config_json = {
             "log": {"loglevel": "none"},
             "inbounds": [{"port": socks_port, "protocol": "socks", "settings": {"udp": True}}],
@@ -57,13 +67,15 @@ def test_via_xray(vless_url, port_offset):
             }]
         }
 
+        # Правильный доступ к вложенным словарям
         ss = config_json["outbounds"][0]["streamSettings"]
         if ss["security"] == "reality":
             ss["realitySettings"] = {
                 "publicKey": get_p("pbk"),
                 "fingerprint": get_p("fp", "chrome"),
                 "serverName": get_p("sni"),
-                "shortId": get_p("sid")
+                "shortId": get_p("sid"),
+                "spiderX": get_p("spx")
             }
         elif ss["security"] == "tls":
             ss["tlsSettings"] = {"serverName": get_p("sni", parsed.hostname)}
@@ -77,22 +89,28 @@ def test_via_xray(vless_url, port_offset):
 
         is_ok = False
         try:
-            # Прямая проверка через SOCKS5 прокси
+            # Проверка через SOCKS5h (DNS через прокси)
             proxies = {"http": f"socks5h://127.0.0.1:{socks_port}", "https": f"socks5h://127.0.0.1:{socks_port}"}
             r = requests.get("http://google.com", proxies=proxies, timeout=5)
-            if r.status_code == 204: is_ok = True
-        except: pass
+            if r.status_code == 204:
+                is_ok = True
+        except:
+            pass
 
         proc.terminate()
         if os.path.exists(cfg_file): os.remove(cfg_file)
         return vless_url if is_ok else None
-    except:
+    except Exception:
         if os.path.exists(cfg_file): os.remove(cfg_file)
         return None
 
 def run():
     setup_xray()
-    print("--- СБОР И ТЕСТ ---")
+    if not os.path.exists(XRAY_BIN):
+        print("Xray не найден. Проверка невозможна.")
+        return
+
+    print("--- СБОР И ГЛУБОКИЙ ТЕСТ ---")
     all_raw = []
     headers = {'User-Agent': 'Mozilla/5.0'}
     
@@ -112,10 +130,10 @@ def run():
             if not any(bad in name for bad in BLACK_LIST) and not re.search(r'\d{3,}', name):
                 candidates.append(cfg)
 
-    print(f"Кандидатов: {len(candidates)}. Проверяем топ-150...")
+    print(f"Кандидатов: {len(candidates)}. Тестируем топ-150...")
     
     results = []
-    # 15 потоков для надежности
+    # 15 потоков для стабильности
     with concurrent.futures.ThreadPoolExecutor(max_workers=15) as executor:
         futures = [executor.submit(test_via_xray, url, i) for i, url in enumerate(candidates[:150])]
         for future in concurrent.futures.as_completed(futures):
@@ -127,9 +145,9 @@ def run():
             f.write("\n".join(results[:40]))
         if GID:
             subprocess.run(f'gh gist edit {GID} -f "{FILE_NAME}" {FILE_NAME}', shell=True)
-            print(f"УСПЕХ! Реально рабочих: {len(results)}")
+            print(f"УСПЕХ! В Gist улетело {len(results)} рабочих серверов.")
     else:
-        print("Ни один сервер не прошел проверку. Возможно, GitHub забанен на этих серверах.")
+        print("Ни один сервер не прошел проверку. Возможно, IP GitHub заблокированы.")
 
 if __name__ == "__main__":
     run()
