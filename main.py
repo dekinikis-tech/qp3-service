@@ -1,11 +1,9 @@
 import requests, os, re, subprocess, json, time, concurrent.futures, urllib.parse
 
-# Настройки Gist
 GID = os.environ.get('MY_GIST_ID')
 FILE_NAME = "vps.txt"
 XRAY_BIN = "xray"
 
-# Список источников
 SOURCES = [
     "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/WHITE-SNI-RU-all.txt",
 "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/WHITE-CIDR-RU-checked.txt",
@@ -16,21 +14,19 @@ SOURCES = [
 "https://raw.githubusercontent.com/AvenCores/goida-vpn-configs/refs/heads/main/githubmirror/26.txt"
 ]
 
-# Черный список авторов и мусора
 BLACK_LIST = ['meshky', '4mohsen', 'white', '708087', 'anycast', 'oneclick', 'ipv6', '4jadi', '4kian']
 
 def test_via_xray(vless_url, port_offset):
-    """Реальная проверка конфига через запуск Xray"""
     socks_port = 26000 + port_offset
     cfg_file = f"cfg_{socks_port}.json"
     try:
         parsed = urllib.parse.urlparse(vless_url)
         params = urllib.parse.parse_qs(parsed.query)
         
-        # ФИКС: Извлекаем строку из списка параметров (Xray требует строку)
+        # КРИТИЧЕСКИЙ ФИКС: Xray требует СТРОКУ, а не список
         def get_p(key, default=""):
             val = params.get(key, [default])
-            return val[0] if isinstance(val, list) else val
+            return val[0] # Берем первый элемент списка
 
         config_json = {
             "log": {"loglevel": "none"},
@@ -55,7 +51,6 @@ def test_via_xray(vless_url, port_offset):
             }]
         }
 
-        # Настройка Reality / TLS
         ss = config_json["outbounds"][0]["streamSettings"]
         if ss["security"] == "reality":
             ss["realitySettings"] = {
@@ -70,13 +65,11 @@ def test_via_xray(vless_url, port_offset):
         with open(cfg_file, "w") as f:
             json.dump(config_json, f)
         
-        # Запускаем Xray
         proc = subprocess.Popen([XRAY_BIN, "run", "-c", cfg_file], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        time.sleep(2) # Даем время на установку соединения
+        time.sleep(2)
 
         is_ok = False
         try:
-            # Проверка доступности Google через SOCKS5h
             proxies = {"http": f"socks5h://127.0.0.1:{socks_port}", "https": f"socks5h://127.0.0.1:{socks_port}"}
             r = requests.get("http://google.com", proxies=proxies, timeout=5)
             if r.status_code == 204:
@@ -96,7 +89,6 @@ def run():
     all_raw = []
     headers = {'User-Agent': 'Mozilla/5.0'}
     
-    # Сбор данных
     for url in SOURCES:
         try:
             res = requests.get(url, timeout=15, headers=headers).text
@@ -108,17 +100,15 @@ def run():
     unique = list(set(all_raw))
     candidates = []
     
-    # Фильтр мусора по именам
     for cfg in unique:
         if '#' in cfg:
             name = urllib.parse.unquote(cfg.split('#')[-1]).lower()
             if not any(bad in name for bad in BLACK_LIST) and not re.search(r'\d{3,}', name):
                 candidates.append(cfg)
 
-    print(f"Кандидатов после чистки: {len(candidates)}. Начинаю Xray тест (топ-100)...")
+    print(f"Кандидатов: {len(candidates)}. Проверяем топ-100...")
     
     results = []
-    # 15 потоков для стабильности в Actions
     with concurrent.futures.ThreadPoolExecutor(max_workers=15) as executor:
         futures = [executor.submit(test_via_xray, url, i) for i, url in enumerate(candidates[:100])]
         for future in concurrent.futures.as_completed(futures):
@@ -126,11 +116,9 @@ def run():
             if res: results.append(res)
 
     if results:
-        # Сохраняем ТОП-40 проверенных серверов
         with open(FILE_NAME, "w", encoding="utf-8") as f:
             f.write("\n".join(results[:40]))
         if GID:
-            # Обновление Gist через GitHub CLI
             subprocess.run(f'gh gist edit {GID} -f "{FILE_NAME}" {FILE_NAME}', shell=True)
             print(f"УСПЕХ! Найдено рабочих серверов: {len(results)}")
     else:
