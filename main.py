@@ -2,7 +2,7 @@ import requests, os, re, subprocess, json, time, concurrent.futures, urllib.pars
 
 GID = os.environ.get('MY_GIST_ID')
 FILE_NAME = "vps.txt"
-XRAY_BIN = "xray" # Теперь он просто в системе
+XRAY_BIN = "xray" # Установленный системно
 
 SOURCES = [
     "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/WHITE-SNI-RU-all.txt",
@@ -23,9 +23,10 @@ def test_via_xray(vless_url, port_offset):
         parsed = urllib.parse.urlparse(vless_url)
         params = urllib.parse.parse_qs(parsed.query)
         
+        # КРИТИЧЕСКИЙ ФИКС: возвращаем строку, а не список
         def get_p(key, default=""):
-            val = params.get(key, [default])[0]
-            return val
+            val = params.get(key, [default])
+            return val[0] if isinstance(val, list) else val
 
         config_json = {
             "log": {"loglevel": "none"},
@@ -56,8 +57,7 @@ def test_via_xray(vless_url, port_offset):
                 "publicKey": get_p("pbk"),
                 "fingerprint": get_p("fp", "chrome"),
                 "serverName": get_p("sni"),
-                "shortId": get_p("sid"),
-                "spiderX": get_p("spx")
+                "shortId": get_p("sid")
             }
         elif ss["security"] == "tls":
             ss["tlsSettings"] = {"serverName": get_p("sni", parsed.hostname)}
@@ -65,12 +65,14 @@ def test_via_xray(vless_url, port_offset):
         with open(cfg_file, "w") as f:
             json.dump(config_json, f)
         
+        # Запуск Xray
         proc = subprocess.Popen([XRAY_BIN, "run", "-c", cfg_file], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         time.sleep(2.0)
 
         is_ok = False
         try:
             proxies = {"http": f"socks5h://127.0.0.1:{socks_port}", "https": f"socks5h://127.0.0.1:{socks_port}"}
+            # Проверяем доступность Google
             r = requests.get("http://google.com", proxies=proxies, timeout=5)
             if r.status_code == 204: is_ok = True
         except: pass
@@ -83,10 +85,9 @@ def test_via_xray(vless_url, port_offset):
         return None
 
 def run():
-    print("--- СТАРТ ПРОВЕРКИ ЧЕРЕЗ СИСТЕМНЫЙ XRAY ---")
+    print("--- ЗАПУСК ПРОВЕРКИ ---")
     all_raw = []
     headers = {'User-Agent': 'Mozilla/5.0'}
-    
     for url in SOURCES:
         try:
             res = requests.get(url, timeout=15, headers=headers).text
@@ -106,7 +107,6 @@ def run():
     print(f"Кандидатов: {len(candidates)}. Тестируем топ-100...")
     
     results = []
-    # 15 потоков
     with concurrent.futures.ThreadPoolExecutor(max_workers=15) as executor:
         futures = [executor.submit(test_via_xray, url, i) for i, url in enumerate(candidates[:100])]
         for future in concurrent.futures.as_completed(futures):
