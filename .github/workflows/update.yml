@@ -19,11 +19,9 @@ jobs:
 
       - name: Install Xray
         run: |
-          # Скачиваем архив напрямую, принудительно сохраняя как zip
+          # Используем ссылку на конкретную версию, чтобы не было редиректов на HTML
           wget -O xray.zip https://github.com
-          # Распаковываем только бинарник xray
           unzip -o xray.zip xray
-          # Устанавливаем в системный путь
           sudo mv xray /usr/local/bin/xray
           sudo chmod +x /usr/local/bin/xray
           xray version
