@@ -2,8 +2,8 @@ name: VPN Auto Update
 
 on:
   schedule:
-    - cron: '0 * * * *' # Запуск каждый час
-  workflow_dispatch: # Кнопка для ручного запуска
+    - cron: '0 * * * *'
+  workflow_dispatch:
 
 jobs:
   update_gist:
@@ -19,11 +19,11 @@ jobs:
 
       - name: Install Xray-core
         run: |
-          # Скачиваем официальный скрипт установки XTLS (прямая ссылка на raw)
+          # Пробуем пробить DNS
+          sleep 5
+          # Качаем скрипт напрямую с правильного домена
           curl -L https://githubusercontent.com -o install.sh
-          # Устанавливаем xray системно
           sudo bash install.sh install
-          # Проверяем, что xray установился
           xray version
 
       - name: Install Python dependencies
@@ -31,7 +31,6 @@ jobs:
 
       - name: Run main script
         env:
-          # Твои секреты из настроек репозитория
           GH_TOKEN: ${{ secrets.GIST_TOKEN }}
           MY_GIST_ID: ${{ secrets.MY_GIST_ID }}
         run: python main.py
