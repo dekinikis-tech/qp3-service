@@ -17,14 +17,13 @@ SOURCES = [
 BLACK_LIST = ['meshky', '4mohsen', 'white', '708087', 'anycast', 'oneclick', 'ipv6', '4jadi', '4kian']
 
 def setup_xray():
-    """Надежная установка Xray без использования внешних bash-скриптов"""
+    """Скачивание Xray через системный wget (самый надежный способ в Ubuntu)"""
     if not os.path.exists(XRAY_BIN):
         print("Загрузка Xray-core...")
+        # Используем зеркало GitHub или прямую ссылку через wget с флагами
         url = "https://github.com"
         try:
-            r = requests.get(url, timeout=30)
-            with open("xray.zip", "wb") as f:
-                f.write(r.content)
+            subprocess.run(f"wget -q -O xray.zip {url}", shell=True)
             with zipfile.ZipFile("xray.zip", "r") as zip_ref:
                 zip_ref.extract("xray", ".")
             os.chmod(XRAY_BIN, stat.S_IRWXU)
@@ -39,11 +38,12 @@ def test_via_xray(vless_url, port_offset):
         parsed = urllib.parse.urlparse(vless_url)
         params = urllib.parse.parse_qs(parsed.query)
         
-        # ГАРАНТИРУЕМ получение СТРОКИ, а не списка
+        # Получаем строку из параметров
         def get_p(key, default=""):
             val = params.get(key, [default])
             return val[0] if isinstance(val, list) else val
 
+        # КОРРЕКТНЫЙ КОНФИГ XRAY
         config_json = {
             "log": {"loglevel": "none"},
             "inbounds": [{"port": socks_port, "protocol": "socks", "settings": {"udp": True}}],
@@ -67,8 +67,8 @@ def test_via_xray(vless_url, port_offset):
             }]
         }
 
-        # Правильный доступ к вложенным словарям
-        ss = config_json["outbounds"][0]["streamSettings"]
+        # Тонкая настройка Reality/TLS
+        ss = config_json["outbounds"][0]["streamSettings"] # Добавлен индекс [0]
         if ss["security"] == "reality":
             ss["realitySettings"] = {
                 "publicKey": get_p("pbk"),
@@ -89,7 +89,6 @@ def test_via_xray(vless_url, port_offset):
 
         is_ok = False
         try:
-            # Проверка через SOCKS5h (DNS через прокси)
             proxies = {"http": f"socks5h://127.0.0.1:{socks_port}", "https": f"socks5h://127.0.0.1:{socks_port}"}
             r = requests.get("http://google.com", proxies=proxies, timeout=5)
             if r.status_code == 204:
@@ -107,10 +106,10 @@ def test_via_xray(vless_url, port_offset):
 def run():
     setup_xray()
     if not os.path.exists(XRAY_BIN):
-        print("Xray не найден. Проверка невозможна.")
+        print("Критическая ошибка: Xray не найден.")
         return
 
-    print("--- СБОР И ГЛУБОКИЙ ТЕСТ ---")
+    print("--- СТАРТ ПРОВЕРКИ ---")
     all_raw = []
     headers = {'User-Agent': 'Mozilla/5.0'}
     
@@ -133,21 +132,22 @@ def run():
     print(f"Кандидатов: {len(candidates)}. Тестируем топ-150...")
     
     results = []
-    # 15 потоков для стабильности
-    with concurrent.futures.ThreadPoolExecutor(max_workers=15) as executor:
+    # 10 потоков для максимальной стабильности
+    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
         futures = [executor.submit(test_via_xray, url, i) for i, url in enumerate(candidates[:150])]
         for future in concurrent.futures.as_completed(futures):
             res = future.result()
             if res: results.append(res)
 
     if results:
+        # Сохраняем ТОП-40
         with open(FILE_NAME, "w", encoding="utf-8") as f:
             f.write("\n".join(results[:40]))
         if GID:
             subprocess.run(f'gh gist edit {GID} -f "{FILE_NAME}" {FILE_NAME}', shell=True)
-            print(f"УСПЕХ! В Gist улетело {len(results)} рабочих серверов.")
+            print(f"УСПЕХ! Найдено рабочих: {len(results)}")
     else:
-        print("Ни один сервер не прошел проверку. Возможно, IP GitHub заблокированы.")
+        print("Рабочих серверов не найдено. Возможно, GitHub заблокирован провайдерами.")
 
 if __name__ == "__main__":
     run()
