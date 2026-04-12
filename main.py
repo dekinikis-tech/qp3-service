@@ -2,7 +2,7 @@ import requests, os, re, subprocess, json, time, concurrent.futures, urllib.pars
 
 GID = os.environ.get('MY_GIST_ID')
 FILE_NAME = "vps.txt"
-XRAY_BIN = "./xray" # Будем скачивать прямо сюда
+XRAY_BIN = "xray" # Теперь будет в системе
 
 SOURCES = [
     "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/WHITE-SNI-RU-all.txt",
@@ -17,14 +17,10 @@ SOURCES = [
 BLACK_LIST = ['meshky', '4mohsen', 'white', '708087', 'anycast', 'oneclick', 'ipv6', '4jadi', '4kian']
 
 def setup_xray():
-    """Скачивание xray напрямую (самый стабильный метод)"""
-    if not os.path.exists(XRAY_BIN):
-        print("Устанавливаю Xray-core...")
-        # Скачиваем официальный бинарник напрямую через wget и распаковываем системным unzip
-        subprocess.run("wget -qO xray.zip https://github.com", shell=True)
-        subprocess.run("unzip -qo xray.zip xray && chmod +x xray", shell=True)
-        if os.path.exists(XRAY_BIN):
-            print("Xray готов.")
+    """Установка Xray через официальный скрипт XTLS"""
+    print("Устанавливаю Xray-core в систему...")
+    cmd = "curl -L https://github.com | sudo bash -s -- install"
+    subprocess.run(cmd, shell=True)
 
 def test_via_xray(vless_url, port_offset):
     socks_port = 26000 + port_offset
@@ -33,11 +29,11 @@ def test_via_xray(vless_url, port_offset):
         parsed = urllib.parse.urlparse(vless_url)
         params = urllib.parse.parse_qs(parsed.query)
         
-        # ГАРАНТИРУЕМ получение СТРОКИ
+        # Получаем ПЕРВОЕ значение из списка (строку)
         def get_p(key, default=""):
-            val = params.get(key, [default])
-            return val[0] if isinstance(val, list) else val
+            return params.get(key, [default])[0]
 
+        # Конфиг, который xray точно поймет
         config_json = {
             "log": {"loglevel": "none"},
             "inbounds": [{"port": socks_port, "protocol": "socks", "settings": {"udp": True}}],
@@ -61,7 +57,7 @@ def test_via_xray(vless_url, port_offset):
             }]
         }
 
-        ss = config_json["outbounds"][0]["streamSettings"] # Исправлен индекс outbounds
+        ss = config_json["outbounds"][0]["streamSettings"]
         if ss["security"] == "reality":
             ss["realitySettings"] = {
                 "publicKey": get_p("pbk"),
@@ -75,13 +71,15 @@ def test_via_xray(vless_url, port_offset):
         with open(cfg_file, "w") as f:
             json.dump(config_json, f)
         
+        # Запуск xray
         proc = subprocess.Popen([XRAY_BIN, "run", "-c", cfg_file], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        time.sleep(1.5)
+        time.sleep(2.0)
 
         is_ok = False
         try:
+            # Прямая проверка через SOCKS5 прокси
             proxies = {"http": f"socks5h://127.0.0.1:{socks_port}", "https": f"socks5h://127.0.0.1:{socks_port}"}
-            r = requests.get("http://google.com", proxies=proxies, timeout=4)
+            r = requests.get("http://google.com", proxies=proxies, timeout=5)
             if r.status_code == 204: is_ok = True
         except: pass
 
@@ -114,12 +112,12 @@ def run():
             if not any(bad in name for bad in BLACK_LIST) and not re.search(r'\d{3,}', name):
                 candidates.append(cfg)
 
-    print(f"Кандидатов: {len(candidates)}. Проверяем топ-100...")
+    print(f"Кандидатов: {len(candidates)}. Проверяем топ-150...")
     
     results = []
-    # 15 потоков для стабильности
+    # 15 потоков для надежности
     with concurrent.futures.ThreadPoolExecutor(max_workers=15) as executor:
-        futures = [executor.submit(test_via_xray, url, i) for i, url in enumerate(candidates[:100])]
+        futures = [executor.submit(test_via_xray, url, i) for i, url in enumerate(candidates[:150])]
         for future in concurrent.futures.as_completed(futures):
             res = future.result()
             if res: results.append(res)
@@ -129,9 +127,9 @@ def run():
             f.write("\n".join(results[:40]))
         if GID:
             subprocess.run(f'gh gist edit {GID} -f "{FILE_NAME}" {FILE_NAME}', shell=True)
-            print(f"УСПЕХ! Найдено: {len(results)}")
+            print(f"УСПЕХ! Реально рабочих: {len(results)}")
     else:
-        print("Ни один сервер не прошел проверку.")
+        print("Ни один сервер не прошел проверку. Возможно, GitHub забанен на этих серверах.")
 
 if __name__ == "__main__":
     run()
