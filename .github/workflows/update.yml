@@ -19,11 +19,13 @@ jobs:
 
       - name: Install Xray
         run: |
-          # Используем ссылку на конкретную версию, чтобы не было редиректов на HTML
-          wget -O xray.zip https://github.com
+          LATEST_URL=$(curl -s "https://api.github.com/repos/XTLS/Xray-core/releases/latest" | grep "browser_download_url" | grep "linux-64.zip" | cut -d '"' -f 4)
+          echo "Downloading Xray from: $LATEST_URL"
+          wget -O xray.zip "$LATEST_URL"
           unzip -o xray.zip xray
           sudo mv xray /usr/local/bin/xray
           sudo chmod +x /usr/local/bin/xray
+          echo "Xray installed successfully:"
           xray version
 
       - name: Install Python dependencies
