@@ -1,5 +1,4 @@
 name: VPN Auto Update
-
 on:
   schedule:
     - cron: '0 * * * *'
@@ -17,13 +16,13 @@ jobs:
         with:
           python-version: '3.9'
 
-      - name: Install Xray-core
+      - name: Install Xray
         run: |
-          # Пробуем пробить DNS
-          sleep 5
-          # Качаем скрипт напрямую с правильного домена
-          curl -L https://githubusercontent.com -o install.sh
-          sudo bash install.sh install
+          # Качаем напрямую с релиза, этот домен не падает
+          wget https://github.com
+          unzip Xray-linux-64.zip xray
+          sudo mv xray /usr/local/bin/xray
+          sudo chmod +x /usr/local/bin/xray
           xray version
 
       - name: Install Python dependencies
