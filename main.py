@@ -17,6 +17,15 @@ SOURCES = [
 
 BLACK_LIST = ['meshky', '4mohsen', 'white', '708087', 'anycast', 'oneclick', 'ipv6', '4jadi', '4kian']
 
+# --- НОВЫЙ БЛОК: ЧЕРНЫЙ СПИСОК IP-АДРЕСОВ ---
+# Диапазоны Cloudflare, которые чаще всего блокируются провайдерами (ТСПУ)
+BLOCKED_IPS = (
+    '104.', 
+    '172.64.', '172.65.', '172.66.', '172.67.', 
+    '188.114.', 
+    '162.159.'
+)
+
 # Регулярное выражение для точного парсинга VLESS
 VLESS_REGEX = re.compile(
     r"vless://(?P<uuid>[^@]+)@(?P<host>[^:?#]+):(?P<port>\d+)\??(?P<query>[^#]+)?#?(?P<name>.*)?"
@@ -32,12 +41,18 @@ def test_via_xray(vless_url, port_offset):
         if not match: return None
         
         data = match.groupdict()
+        address = data['host']
+        
+        # --- ПРИМЕНЕНИЕ ФИЛЬТРА IP ---
+        # Если адрес начинается с одного из проблемных префиксов, сразу пропускаем
+        if address.startswith(BLOCKED_IPS):
+            return None
+            
         query_params = urllib.parse.parse_qs(data.get('query') or '')
         
         def get_p(key, default=""): 
             return query_params.get(key, [default])[0]
 
-        address = data['host']
         sni_host = get_p('sni', get_p('host', address))
         network_type = get_p('type', 'tcp')
         stream_settings = {"network": network_type, "security": get_p('security', 'none')}
@@ -77,7 +92,7 @@ def test_via_xray(vless_url, port_offset):
         proc = subprocess.Popen([XRAY_BIN, "run", "-c", cfg_file], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         time.sleep(2) # Даем время на запуск
         
-        if proc.poll() is not None: return None # Если Xray упал сразу
+        if proc.poll() is not None: return None 
         
         try:
             proxies = {"http": f"socks5h://127.0.0.1:{socks_port}", "https": f"socks5h://127.0.0.1:{socks_port}"}
@@ -95,14 +110,13 @@ def test_via_xray(vless_url, port_offset):
         if os.path.exists(cfg_file): os.remove(cfg_file)
 
 def run():
-    print("--- ЗАПУСК ПРОВЕРКИ (v7 - Финальная версия) ---")
+    print("--- ЗАПУСК ПРОВЕРКИ (v8 - Анти-Cloudflare фильтр) ---")
     all_raw = []
     headers = {'User-Agent': 'Mozilla/5.0'}
     
     for url in SOURCES:
         try:
             res = requests.get(url, timeout=15, headers=headers).text
-            # Ищем ссылки в открытом тексте
             found = re.findall(r'vless://[^\s\'"<>]+', res)
             print(f"Источник: {url[:40]}... | Найдено: {len(found)}")
             all_raw.extend(found)
@@ -120,6 +134,8 @@ def run():
     print(f"\nВсего уникальных: {len(unique)}. Кандидатов после фильтрации: {len(candidates)}. Проверяем топ-100...")
     
     results = []
+    # Если мы отсеиваем много серверов, можно увеличить количество проверяемых, 
+    # заменив candidates[:100] на candidates[:150] или больше. Пока оставим 100.
     with concurrent.futures.ThreadPoolExecutor(max_workers=20) as executor:
         futures = {executor.submit(test_via_xray, url, i): url for i, url in enumerate(candidates[:100])}
         for future in concurrent.futures.as_completed(futures):
