@@ -4,6 +4,8 @@ import requests, os, re, subprocess, json, time, concurrent.futures, urllib.pars
 GID = os.environ.get('MY_GIST_ID')
 FILE_NAME = "vps.txt"
 XRAY_BIN = "xray"
+
+# Оставили только две рабочие ссылки
 SOURCES = [
     "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/Vless-Reality-White-Lists-Rus-Mobile.txt",
     "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/Vless-Reality-White-Lists-Rus-Mobile-2.txt"
@@ -32,8 +34,6 @@ def test_via_xray(vless_url):
         if ':' in address: return None 
             
         query = urllib.parse.parse_qs(data.get('query') or '')
-        
-        # ВОЗВРАЩЕНО К ОРИГИНАЛУ: надежное извлечение с дефолтными значениями
         def get_p(k, d=""): return query.get(k, [d])[0]
 
         sni = get_p('sni', get_p('host', address))
@@ -46,7 +46,6 @@ def test_via_xray(vless_url):
         elif net == "grpc":
             stream_settings["grpcSettings"] = {"serviceName": get_p("serviceName", "")}
             
-        # ВОЗВРАЩЕНО К ОРИГИНАЛУ: строгий парсинг Reality со всеми нужными параметрами
         if sec == "reality":
             stream_settings["realitySettings"] = {"serverName": sni, "fingerprint": get_p("fp", "chrome"), "publicKey": get_p("pbk"), "shortId": get_p("sid"), "spiderX": get_p("spx", "/")}
         elif sec == "tls":
@@ -54,7 +53,7 @@ def test_via_xray(vless_url):
 
         config = {
             "log": {"loglevel": "none"},
-            "inbounds": [{"listen": "127.0.0.1", "port": port, "protocol": "http"}], # Добавлен listen для безопасности на сервере
+            "inbounds": [{"listen": "127.0.0.1", "port": port, "protocol": "http"}],
             "outbounds": [{"protocol": "vless", "settings": {"vnext": [{"address": address, "port": server_port, "users": [{"id": data['uuid'], "encryption": "none", "flow": get_p("flow")}]}]}, "streamSettings": stream_settings}]
         }
         
@@ -78,17 +77,27 @@ def test_via_xray(vless_url):
         session = requests.Session()
         session.trust_env = False
         
+        # 🔥 ПАРАНОИДАЛЬНАЯ ПРОВЕРКА (DOUBLE-TAP HTTPS)
+        # Проверка 1: Разогрев и проверка TLS-рукопожатия (Таймаут 2.5 сек)
+        r1 = session.get("https://www.gstatic.com/generate_204", proxies=proxies, timeout=2.5)
+        if r1.status_code != 204:
+            return None
+            
+        time.sleep(0.3) # Имитация задержки реального устройства
+        
         t1 = time.perf_counter()
         
-        # ВОЗВРАЩЕНО К ОРИГИНАЛУ: gstatic.com не блокирует VPN-айпишники
-        r1 = session.get("http://www.gstatic.com/generate_204", proxies=proxies, timeout=5.0)
+        # Проверка 2: Контрольный замер через Google (Таймаут 2.0 сек)
+        r2 = session.get("https://www.google.com/generate_204", proxies=proxies, timeout=2.0)
         
-        if r1.status_code == 204:
+        if r2.status_code == 204:
             ping = int((time.perf_counter() - t1) * 1000)
             return (vless_url, ping)
+        else:
+            return None
             
     except Exception: 
-        return None
+        return None # Любой разрыв связи или таймаут бракует сервер
     finally:
         if proc:
             try: 
@@ -101,7 +110,7 @@ def test_via_xray(vless_url):
         port_queue.put(port)
 
 def run():
-    print("--- ЗАПУСК ПРОВЕРКИ (v19: Исправленный чекер) ---")
+    print("--- ЗАПУСК ПРОВЕРКИ (v20: Параноидальный режим Double-Tap) ---")
     all_raw, headers = [], {'User-Agent': 'Mozilla/5.0'}
     for url in SOURCES:
         try:
@@ -125,7 +134,7 @@ def run():
         futures = {executor.submit(test_via_xray, url): url for url in candidates}
         for future in concurrent.futures.as_completed(futures):
             tested_count += 1
-            if tested_count % 100 == 0:
+            if tested_count % 50 == 0:
                 print(f"  [Прогресс: {tested_count} / {len(candidates)}]")
             res = future.result()
             if res:
@@ -135,7 +144,7 @@ def run():
         results.sort(key=lambda x: x[1])
         final_urls = [r[0] for r in results]
         
-        print(f"\nИТОГ: Из {len(candidates)} серверов проверку прошли: {len(final_urls)}.")
+        print(f"\nИТОГ: Из {len(candidates)} серверов жесткую проверку прошли: {len(final_urls)}.")
         
         with open(FILE_NAME, "w", encoding="utf-8") as f:
             f.write("\n".join(final_urls[:50]))
@@ -145,7 +154,7 @@ def run():
             subprocess.run(f'gh gist edit {GID} -f "{FILE_NAME}" {FILE_NAME}', shell=True)
             print("Gist обновлен.")
     else:
-        print("\nНет рабочих серверов.")
+        print("\nНи один сервер не прошел параноидальную проверку.")
 
 if __name__ == "__main__":
     run()
