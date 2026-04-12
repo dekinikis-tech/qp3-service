@@ -1,8 +1,10 @@
 name: VPN Auto Update
 
 on:
+  # Запускать каждый час
   schedule:
     - cron: '0 * * * *'
+  # Позволяет запускать вручную со страницы Actions в GitHub
   workflow_dispatch:
 
 jobs:
@@ -17,22 +19,35 @@ jobs:
         with:
           python-version: '3.9'
 
+      # --- ИСПРАВЛЕННЫЙ БЛОК ---
       - name: Install Xray
         run: |
-          LATEST_URL=$(curl -s "https://api.github.com/repos/XTLS/Xray-core/releases/latest" | grep "browser_download_url" | grep "linux-64.zip" | cut -d '"' -f 4)
+          # 1. Находим URL, который ТОЧНО заканчивается на linux-64.zip"
+          # Это гарантирует, что мы не захватим лишние ссылки (например, на .dgst файлы)
+          LATEST_URL=$(curl -s "https://api.github.com/repos/XTLS/Xray-core/releases/latest" | grep "browser_download_url" | grep "linux-64.zip\"" | cut -d '"' -f 4)
+          
+          # 2. Скачиваем архив
           echo "Downloading Xray from: $LATEST_URL"
           wget -O xray.zip "$LATEST_URL"
+          
+          # 3. Распаковываем только исполняемый файл xray
           unzip -o xray.zip xray
+          
+          # 4. Перемещаем в системную директорию и делаем исполняемым
           sudo mv xray /usr/local/bin/xray
           sudo chmod +x /usr/local/bin/xray
+          
+          # 5. Проверяем версию для уверенности
           echo "Xray installed successfully:"
           xray version
 
       - name: Install Python dependencies
         run: pip install requests
 
-      - name: Run main script
+      - name: Run main script to check proxies and update Gist
         env:
+          # Секреты должны быть добавлены в настройках вашего репозитория
+          # Settings -> Secrets and variables -> Actions
           GH_TOKEN: ${{ secrets.GIST_TOKEN }}
           MY_GIST_ID: ${{ secrets.MY_GIST_ID }}
         run: python main.py
