@@ -22,9 +22,13 @@ REQUEST_TIMEOUT     = 7.0
 XRAY_START_TIMEOUT  = 3.5
 
 TEST_URLS = [
+    # Ресурсы заблокированные в России — ответ возможен ТОЛЬКО через рабочий туннель.
+    # Прямой запрос без VPN даст connection refused / таймаут.
+    "http://www.instagram.com/",
+    "http://www.facebook.com/",
+    # Запасные нейтральные (быстрые, но менее надёжны для проверки туннеля)
     "http://www.gstatic.com/generate_204",
     "http://cp.cloudflare.com/",
-    "http://connectivitycheck.gstatic.com/generate_204",
 ]
 
 SOURCES = [
@@ -193,17 +197,36 @@ def _build_xray_config(data: dict, port: int) -> dict:
     return {
         "log": {"loglevel": "none"},
         "inbounds": [{"listen": "127.0.0.1", "port": port, "protocol": "http"}],
-        "outbounds": [{
-            "protocol": "vless",
-            "settings": {
-                "vnext": [{
-                    "address": address,
-                    "port":    server_port,
-                    "users":   [{"id": data['uuid'], "encryption": "none", "flow": q("flow")}],
-                }]
+        "outbounds": [
+            {
+                "tag": "proxy",
+                "protocol": "vless",
+                "settings": {
+                    "vnext": [{
+                        "address": address,
+                        "port":    server_port,
+                        "users":   [{"id": data['uuid'], "encryption": "none", "flow": q("flow")}],
+                    }]
+                },
+                "streamSettings": stream,
             },
-            "streamSettings": stream,
-        }],
+            {
+                # Блокируем прямые соединения — если VPN не работает, запрос упадёт с ошибкой,
+                # а не пройдёт напрямую и не даст ложный положительный результат.
+                "tag": "block",
+                "protocol": "blackhole",
+            }
+        ],
+        "routing": {
+            "domainStrategy": "AsIs",
+            "rules": [
+                {
+                    "type": "field",
+                    "outboundTag": "proxy",
+                    "network": "tcp,udp"
+                }
+            ]
+        }
     }
 
 
@@ -256,17 +279,34 @@ def _build_xray_config_trojan(url: str, port: int) -> dict | None:
     return {
         "log": {"loglevel": "none"},
         "inbounds": [{"listen": "127.0.0.1", "port": port, "protocol": "http"}],
-        "outbounds": [{
-            "protocol": "trojan",
-            "settings": {
-                "servers": [{
-                    "address":  address,
-                    "port":     server_port,
-                    "password": password,
-                }]
+        "outbounds": [
+            {
+                "tag": "proxy",
+                "protocol": "trojan",
+                "settings": {
+                    "servers": [{
+                        "address":  address,
+                        "port":     server_port,
+                        "password": password,
+                    }]
+                },
+                "streamSettings": stream,
             },
-            "streamSettings": stream,
-        }],
+            {
+                "tag": "block",
+                "protocol": "blackhole",
+            }
+        ],
+        "routing": {
+            "domainStrategy": "AsIs",
+            "rules": [
+                {
+                    "type": "field",
+                    "outboundTag": "proxy",
+                    "network": "tcp,udp"
+                }
+            ]
+        }
     }
 
 
