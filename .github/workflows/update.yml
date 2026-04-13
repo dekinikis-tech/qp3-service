@@ -5,9 +5,16 @@ on:
     - cron: '0 * * * *'
   workflow_dispatch:
 
+# Новый запуск автоматически отменяет предыдущий
+concurrency:
+  group: vpn-update
+  cancel-in-progress: true
+
 jobs:
   update_gist:
     runs-on: ubuntu-latest
+    # Жёсткий лимит: если за 25 минут не уложились — убиваем
+    timeout-minutes: 25
 
     steps:
       - name: Checkout code
@@ -16,33 +23,23 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
-          python-version: '3.9'
+          python-version: '3.11'
 
-      # --- ИСПРАВЛЕННЫЙ БЛОК: ИСПОЛЬЗУЕМ JQ ДЛЯ НАДЕЖНОСТИ ---
       - name: Install Xray
         run: |
-          # 1. Используем jq для надежного извлечения URL из ответа GitHub API
-          LATEST_URL=$(curl -s "https://api.github.com/repos/XTLS/Xray-core/releases/latest" | jq -r '.assets[] | select(.name == "Xray-linux-64.zip") | .browser_download_url')
-          
-          # 2. Скачиваем архив
+          LATEST_URL=$(curl -s "https://api.github.com/repos/XTLS/Xray-core/releases/latest" \
+            | jq -r '.assets[] | select(.name == "Xray-linux-64.zip") | .browser_download_url')
           echo "Downloading Xray from: $LATEST_URL"
-          wget -O xray.zip "$LATEST_URL"
-          
-          # 3. Распаковываем исполняемый файл xray
+          wget -q -O xray.zip "$LATEST_URL"
           unzip -o xray.zip xray
-          
-          # 4. Перемещаем в системную директорию и делаем исполняемым
           sudo mv xray /usr/local/bin/xray
           sudo chmod +x /usr/local/bin/xray
-          
-          # 5. Проверяем версию
-          echo "Xray installed successfully:"
           xray version
 
       - name: Install Python dependencies
         run: pip install "requests[socks]"
 
-      - name: Run main script to check proxies and update Gist
+      - name: Run checker
         env:
           GH_TOKEN: ${{ secrets.GIST_TOKEN }}
           MY_GIST_ID: ${{ secrets.MY_GIST_ID }}
