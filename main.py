@@ -1,4 +1,5 @@
-import requests, os, re, subprocess, json, time, concurrent.futures, urllib.parse, queue, socket, statistics
+import requests, os, re, subprocess, json, time, concurrent.futures
+import urllib.parse, queue, socket, statistics
 
 # ============================================================
 # НАСТРОЙКИ
@@ -8,22 +9,18 @@ FILE_NAME  = "vps.txt"
 XRAY_BIN   = "xray"
 TOP_N      = 50
 
-MAX_WORKERS = 10
-PING_ROUNDS = 3
+# Этап 1 — быстрый TCP-пинг (много воркеров, без xray)
+TCP_WORKERS     = 100
+TCP_TIMEOUT     = 1.5   # сек
 
-# Максимально допустимый средний пинг (мс)
-MAX_PING_MS = 3000
+# Этап 2 — глубокая проверка через xray (только выжившие)
+XRAY_WORKERS        = 15
+PING_ROUNDS         = 2
+MAX_PING_MS         = 4000
+MAX_LOSS_RATE       = 0.5
+REQUEST_TIMEOUT     = 7.0
+XRAY_START_TIMEOUT  = 3.5
 
-# При PING_ROUNDS=3: 0.5 = хватит 2 успешных из 3
-MAX_LOSS_RATE = 0.5
-
-# Таймаут одного HTTP-запроса через прокси (сек)
-REQUEST_TIMEOUT = 8.0
-
-# Максимальное время ожидания старта xray (сек)
-XRAY_START_TIMEOUT = 4.0
-
-# URL-цели для проверки (пробуем по очереди)
 TEST_URLS = [
     "http://www.gstatic.com/generate_204",
     "http://cp.cloudflare.com/",
@@ -33,7 +30,7 @@ TEST_URLS = [
 SOURCES = [
     "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/Vless-Reality-White-Lists-Rus-Mobile.txt",
     "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/Vless-Reality-White-Lists-Rus-Mobile-2.txt",
-    "https://raw.githubusercontent.com/AvenCores/goida-vpn-configs/refs/heads/main/githubmirror/26.txt"
+    "https://raw.githubusercontent.com/AvenCores/goida-vpn-configs/refs/heads/main/githubmirror/26.txt",
 ]
 
 BLACK_LIST = [
@@ -52,9 +49,46 @@ VLESS_REGEX = re.compile(
 )
 
 port_queue: queue.Queue = queue.Queue()
-for _p in range(25000, 25000 + MAX_WORKERS):
+for _p in range(25000, 25000 + XRAY_WORKERS):
     port_queue.put(_p)
 
+
+# ============================================================
+# ЭТАП 1: БЫСТРАЯ TCP-ПРОВЕРКА
+# ============================================================
+
+def tcp_alive(vless_url: str) -> str | None:
+    """
+    Просто проверяем, открыт ли TCP-порт сервера.
+    Не запускаем xray, не шифруем — просто connect().
+    Быстро: ~0.1-1.5 сек на сервер.
+    """
+    match = VLESS_REGEX.match(vless_url)
+    if not match:
+        return None
+
+    data    = match.groupdict()
+    address = data['host']
+    port    = int(data['port'])
+
+    # Фильтры
+    if address.startswith(BLOCKED_IPS):
+        return None
+    if ':' in address:  # IPv6
+        return None
+    if any(bad in urllib.parse.unquote(vless_url).lower() for bad in BLACK_LIST):
+        return None
+
+    try:
+        with socket.create_connection((address, port), timeout=TCP_TIMEOUT):
+            return vless_url
+    except OSError:
+        return None
+
+
+# ============================================================
+# ЭТАП 2: ГЛУБОКАЯ ПРОВЕРКА ЧЕРЕЗ XRAY
+# ============================================================
 
 def _wait_for_port(host: str, port: int, timeout: float) -> bool:
     deadline = time.time() + timeout
@@ -111,22 +145,14 @@ def _build_xray_config(data: dict, port: int) -> dict:
 
     return {
         "log": {"loglevel": "none"},
-        "inbounds": [{
-            "listen":   "127.0.0.1",
-            "port":     port,
-            "protocol": "http",
-        }],
+        "inbounds": [{"listen": "127.0.0.1", "port": port, "protocol": "http"}],
         "outbounds": [{
             "protocol": "vless",
             "settings": {
                 "vnext": [{
                     "address": address,
                     "port":    server_port,
-                    "users":   [{
-                        "id":         data['uuid'],
-                        "encryption": "none",
-                        "flow":       q("flow"),
-                    }],
+                    "users":   [{"id": data['uuid'], "encryption": "none", "flow": q("flow")}],
                 }]
             },
             "streamSettings": stream,
@@ -135,13 +161,7 @@ def _build_xray_config(data: dict, port: int) -> dict:
 
 
 def test_via_xray(vless_url: str):
-    """
-    Сервер считается РАБОЧИМ только если:
-    - xray успешно запустился
-    - хотя бы 1 запрос вернул HTTP-ответ
-    - процент потерь <= MAX_LOSS_RATE
-    - средний пинг <= MAX_PING_MS
-    """
+    """Полная проверка через xray — только для серверов прошедших TCP-тест."""
     port     = port_queue.get()
     cfg_file = f"cfg_{port}.json"
     proc     = None
@@ -151,15 +171,9 @@ def test_via_xray(vless_url: str):
         if not match:
             return None
 
-        data    = match.groupdict()
-        address = data['host']
-
-        if address.startswith(BLOCKED_IPS):
-            return None
-        if ':' in address:
-            return None
-
+        data   = match.groupdict()
         config = _build_xray_config(data, port)
+
         with open(cfg_file, "w") as f:
             json.dump(config, f)
 
@@ -185,33 +199,23 @@ def test_via_xray(vless_url: str):
 
         for _ in range(PING_ROUNDS):
             success = False
-            # Пробуем несколько тестовых URL — берём первый успешный
             for test_url in TEST_URLS:
                 try:
                     t0 = time.perf_counter()
-                    r  = session.get(
-                        test_url,
-                        timeout=REQUEST_TIMEOUT,
-                        allow_redirects=True,
-                    )
+                    r  = session.get(test_url, timeout=REQUEST_TIMEOUT, allow_redirects=True)
                     elapsed = int((time.perf_counter() - t0) * 1000)
-                    # Любой HTTP-ответ — значит сервер работает
                     if r.status_code in (200, 204, 301, 302):
                         pings.append(elapsed)
                         success = True
                         break
                 except Exception:
                     continue
-
             if not success:
                 losses += 1
 
-        # Должен быть хотя бы 1 успешный запрос
         if not pings:
             return None
-
-        loss_rate = losses / PING_ROUNDS
-        if loss_rate > MAX_LOSS_RATE:
+        if losses / PING_ROUNDS > MAX_LOSS_RATE:
             return None
 
         avg_ping = int(statistics.mean(pings))
@@ -232,14 +236,16 @@ def test_via_xray(vless_url: str):
                 proc.terminate()
                 proc.wait(timeout=1.5)
             except Exception:
-                try:
-                    proc.kill()
-                except Exception:
-                    pass
+                try: proc.kill()
+                except Exception: pass
         if os.path.exists(cfg_file):
             os.remove(cfg_file)
         port_queue.put(port)
 
+
+# ============================================================
+# СБОР КОНФИГОВ
+# ============================================================
 
 def fetch_configs() -> list[str]:
     all_raw: list[str] = []
@@ -247,97 +253,114 @@ def fetch_configs() -> list[str]:
 
     for url in SOURCES:
         try:
-            res = requests.get(url, timeout=15, headers=headers).text
+            res   = requests.get(url, timeout=15, headers=headers).text
             found = re.findall(r'vless://[^\s\'"<>]+', res)
             all_raw.extend(found)
-            print(f"  [OK] {url}  →  найдено: {len(found)}")
+            print(f"  [OK] {url}  →  {len(found)} конфигов")
         except Exception as e:
             print(f"  [WARN] Не удалось загрузить {url}: {e}")
 
-    unique = list(set(all_raw))
-    candidates = [
-        cfg for cfg in unique
-        if not any(bad in urllib.parse.unquote(cfg).lower() for bad in BLACK_LIST)
-    ]
-    return candidates
+    return list(set(all_raw))
 
+
+# ============================================================
+# ГЛАВНЫЙ ЗАПУСК
+# ============================================================
 
 def run():
+    t_start = time.time()
     print("=" * 60)
-    print("  ЗАПУСК ПРОВЕРКИ VPN-СЕРВЕРОВ")
-    print(f"  Раундов на сервер : {PING_ROUNDS}")
-    print(f"  Макс. пинг        : {MAX_PING_MS} мс")
-    print(f"  Макс. потери      : {int(MAX_LOSS_RATE * 100)}%")
-    print(f"  Таймаут запроса   : {REQUEST_TIMEOUT} сек")
-    print(f"  Таймаут xray      : {XRAY_START_TIMEOUT} сек")
+    print("  ЗАПУСК ПРОВЕРКИ VPN-СЕРВЕРОВ  (2-этапный)")
+    print(f"  TCP-воркеры   : {TCP_WORKERS}  (таймаут {TCP_TIMEOUT}с)")
+    print(f"  Xray-воркеры  : {XRAY_WORKERS}  (таймаут {XRAY_START_TIMEOUT}с)")
+    print(f"  Раундов       : {PING_ROUNDS},  макс. пинг: {MAX_PING_MS}мс")
     print("=" * 60)
 
-    print("\n[1/3] Сбор конфигов...")
-    candidates = fetch_configs()
-    print(f"\nВсего уникальных кандидатов после фильтрации: {len(candidates)}\n")
+    # --- Сбор ---
+    print("\n[1/4] Сбор конфигов...")
+    all_configs = fetch_configs()
+    print(f"      Итого уникальных: {len(all_configs)}")
 
-    if not candidates:
-        print("Нет кандидатов для проверки.")
+    if not all_configs:
+        print("Нет кандидатов.")
         return
 
-    print("[2/3] Тестирование серверов...")
-    results = []
-    tested  = 0
-    total   = len(candidates)
+    # --- Этап 1: TCP ---
+    print(f"\n[2/4] Быстрая TCP-проверка ({TCP_WORKERS} воркеров)...")
+    alive = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=TCP_WORKERS) as ex:
+        for url in concurrent.futures.as_completed(
+            {ex.submit(tcp_alive, u): u for u in all_configs}
+        ):
+            result = url.result()
+            if result:
+                alive.append(result)
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-        futures = {executor.submit(test_via_xray, url): url for url in candidates}
+    elapsed_tcp = int(time.time() - t_start)
+    print(f"      TCP живых: {len(alive)} / {len(all_configs)}  ({elapsed_tcp}с)")
 
+    if not alive:
+        print("Нет живых серверов после TCP-проверки.")
+        return
+
+    # --- Этап 2: Xray ---
+    print(f"\n[3/4] Глубокая xray-проверка {len(alive)} серверов ({XRAY_WORKERS} воркеров)...")
+    results  = []
+    tested   = 0
+    total    = len(alive)
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=XRAY_WORKERS) as ex:
+        futures = {ex.submit(test_via_xray, u): u for u in alive}
         for future in concurrent.futures.as_completed(futures):
             tested += 1
-            if tested % 25 == 0 or tested == total:
-                passed = len(results)
-                print(f"  Прогресс: {tested}/{total}  |  Прошли: {passed}")
-
+            if tested % 10 == 0 or tested == total:
+                print(f"  Прогресс: {tested}/{total}  |  Прошли xray: {len(results)}")
             res = future.result()
             if res:
                 results.append(res)
 
-    print(f"\n[3/3] Сохранение результатов...")
+    elapsed_total = int(time.time() - t_start)
+
+    # --- Сохранение ---
+    print(f"\n[4/4] Сохранение...")
 
     if not results:
-        print("\n❌ Нет рабочих серверов. В Gist ничего не записываем.")
+        print("❌ Нет рабочих серверов.")
         return
 
     results.sort(key=lambda x: x[1])
     top = results[:TOP_N]
 
     print(f"\n{'─'*60}")
-    print(f"  ИТОГ: проверено {total}, прошли {len(results)}, сохраняем топ {len(top)}")
+    print(f"  Всего: {len(all_configs)} → TCP: {len(alive)} → xray: {len(results)} → топ: {len(top)}")
+    print(f"  Время: {elapsed_total}с")
     print(f"{'─'*60}")
-    print(f"  {'#':<4} {'Пинг':>6} {'Jitter':>8} {'Потери':>8}   Сервер")
-    print(f"  {'─'*4} {'─'*6} {'─'*8} {'─'*8}   {'─'*30}")
 
     for i, (url, score, avg, jitter, losses) in enumerate(top[:10], 1):
-        name = urllib.parse.unquote(url.split('#')[-1])[:35] if '#' in url else url[8:45]
-        print(f"  {i:<4} {avg:>5}мс  {jitter:>6}мс  {losses}/{PING_ROUNDS}      {name}")
+        name = urllib.parse.unquote(url.split('#')[-1])[:40] if '#' in url else url[8:48]
+        print(f"  {i:<3} {avg:>5}мс  jitter:{jitter:>4}мс  loss:{losses}/{PING_ROUNDS}  {name}")
 
     if len(top) > 10:
-        print(f"  ... и ещё {len(top) - 10} серверов")
+        print(f"  ... ещё {len(top)-10}")
 
     final_urls = [r[0] for r in top]
     with open(FILE_NAME, "w", encoding="utf-8") as f:
         f.write("\n".join(final_urls))
 
-    print(f"\n✅ Сохранено {len(final_urls)} рабочих серверов в {FILE_NAME}")
+    print(f"\n✅ Сохранено {len(final_urls)} серверов в {FILE_NAME}")
 
     if GID:
         print("Обновляем Gist...")
-        result = subprocess.run(
+        res = subprocess.run(
             ["gh", "gist", "edit", GID, "-f", FILE_NAME, FILE_NAME],
             capture_output=True, text=True
         )
-        if result.returncode == 0:
+        if res.returncode == 0:
             print("✅ Gist обновлён.")
         else:
-            print(f"❌ Ошибка обновления Gist: {result.stderr.strip()}")
+            print(f"❌ Gist ошибка: {res.stderr.strip()}")
     else:
-        print("⚠️  MY_GIST_ID не задан — Gist не обновляется.")
+        print("⚠️  MY_GIST_ID не задан.")
 
 
 if __name__ == "__main__":
