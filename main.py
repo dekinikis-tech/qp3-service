@@ -28,14 +28,24 @@ TEST_URLS = [
 ]
 
 SOURCES = [
-    # Основные источники
+    # --- ЧЕРНЫЕ СПИСКИ [BL] — основной источник нужных серверов ---
+    # VLESS (121 сервер)
+    "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/BLACK_VLESS_RUS.txt",
+    # VLESS mobile (меньший список)
+    "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/BLACK_VLESS_RUS_mobile.txt",
+    # SS + Hysteria2 + Trojan + другие (48 серверов)
+    "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/BLACK_SS+All_RUS.txt",
+
+    # --- БЕЛЫЕ CIDR списки ---
+    # Полный список CIDR (30 серверов)
+    "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/WHITE-CIDR-RU-all.txt",
+    # Только проверенные CIDR (VK, Yandex и др.)
+    "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/WHITE-CIDR-RU-checked.txt",
+    # SNI белые списки (78 серверов)
+    "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/WHITE-SNI-RU-all.txt",
+
+    # --- Старые файлы (mobile-оптимизированные) ---
     "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/Vless-Reality-White-Lists-Rus-Mobile.txt",
-    "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/Vless-Reality-White-Lists-Rus-Mobile-2.txt",
-    # Дополнительные файлы из того же репо (BL и CIDR списки)
-    "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/Vless-Reality-Black-Lists.txt",
-    "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/Vless-Reality-Black-Lists-2.txt",
-    "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/Vless-Reality-CIDR-Lists.txt",
-    "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/Vless-Reality-CIDR-Lists-2.txt",
 ]
 
 # FIX: убраны 'anycast' и 'ipv6' — они резали рабочие серверы по тегу в #-комментарии
