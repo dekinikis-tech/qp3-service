@@ -1,5 +1,5 @@
 import requests, os, re, subprocess, json, time, concurrent.futures
-import urllib.parse, queue, socket, statistics
+import urllib.parse, queue, socket, statistics, base64
 
 # ============================================================
 # НАСТРОЙКИ
@@ -358,17 +358,67 @@ def test_via_xray(url: str):
 # СБОР КОНФИГОВ
 # ============================================================
 
+def _decode_subscription(text: str) -> str:
+    """
+    Автоматически определяет формат подписки и возвращает plain text.
+    Поддерживает:
+      - Plain text (vless://... построчно)
+      - Base64 от всего файла (стандарт V2Ray/Xray подписок)
+      - Base64 с padding-ошибками (дополняем до кратного 4)
+    """
+    stripped = text.strip()
+
+    # Если уже содержит протокол — это plain text, декодировать не нужно
+    if re.search(r'(?:vless|trojan|hysteria2|ss)://', stripped):
+        return stripped
+
+    # Пробуем base64 (стандартный и urlsafe вариант)
+    for variant in (stripped, stripped.replace('-', '+').replace('_', '/')):
+        # Дополняем padding если нужно
+        padded = variant + '=' * ((-len(variant)) % 4)
+        try:
+            decoded = base64.b64decode(padded).decode('utf-8', errors='ignore')
+            if re.search(r'(?:vless|trojan|hysteria2|ss)://', decoded):
+                return decoded
+        except Exception:
+            continue
+
+    # Попробуем построчно — иногда каждая строка сама по себе base64
+    lines_decoded = []
+    for line in stripped.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        if re.search(r'(?:vless|trojan|hysteria2|ss)://', line):
+            lines_decoded.append(line)
+            continue
+        try:
+            padded = line + '=' * ((-len(line)) % 4)
+            decoded_line = base64.b64decode(padded).decode('utf-8', errors='ignore')
+            if re.search(r'(?:vless|trojan|hysteria2|ss)://', decoded_line):
+                lines_decoded.append(decoded_line)
+        except Exception:
+            continue
+
+    if lines_decoded:
+        return '\n'.join(lines_decoded)
+
+    return stripped  # вернём как есть, PROTO_REGEX сам ничего не найдёт
+
+
 def fetch_configs() -> list[str]:
     all_raw: list[str] = []
     headers = {'User-Agent': 'Mozilla/5.0'}
 
     for url in SOURCES:
         try:
-            res   = requests.get(url, timeout=15, headers=headers).text
-            # FIX: ищем все поддерживаемые протоколы, а не только vless
-            found = PROTO_REGEX.findall(res)
+            raw_text = requests.get(url, timeout=15, headers=headers).text
+            # FIX: автодетект base64 — BL-файлы igareck закодированы в base64
+            text  = _decode_subscription(raw_text)
+            found = PROTO_REGEX.findall(text)
             all_raw.extend(found)
-            print(f"  [OK] {url}  →  {len(found)} конфигов")
+            fmt   = "plain" if text is raw_text else "base64"
+            print(f"  [OK] {url}  →  {len(found)} конфигов  [{fmt}]")
         except Exception as e:
             print(f"  [WARN] Не удалось загрузить {url}: {e}")
 
