@@ -528,7 +528,7 @@ def generate_html_viewer(intl_results: list, ru_results: list, elapsed: int) -> 
               <td class="{ping_cls}">{avg}мс</td>
               <td class="jitter">{jitter}мс</td>
               <td class="{'loss-ok' if loss_pct == 0 else 'loss-bad'}">{loss_pct}%</td>
-              <td><button class="copy-btn" onclick="copyUrl(this)" data-url="{safe_url}">⎘</button></td>
+              <td><button class="copy-btn" data-url="{safe_url}">&#x2398;</button></td>
             </tr>""")
         return '\n'.join(rows)
 
@@ -834,12 +834,12 @@ footer {{
   </div>
 
   <div class="tabs">
-    <button class="tab active" onclick="switchTab('intl', this)">🌍 Зарубежные ({len(intl_results)})</button>
-    <button class="tab tab-ru" onclick="switchTab('ru', this)">🇷🇺 Российские ({len(ru_results)})</button>
+    <button class="tab active" data-tab="intl">🌍 Зарубежные ({len(intl_results)})</button>
+    <button class="tab tab-ru" data-tab="ru">🇷🇺 Российские ({len(ru_results)})</button>
   </div>
 
   <div class="panel active" id="panel-intl">
-    <input class="search-bar" type="text" placeholder="Поиск по адресу, протоколу, тегу..." oninput="filterTable(this, 'tbl-intl')">
+    <input class="search-bar" type="text" placeholder="Поиск по адресу, протоколу, тегу..." data-table="tbl-intl">
     <div class="table-wrap">
       <table id="tbl-intl">
         <thead>
@@ -853,7 +853,7 @@ footer {{
   </div>
 
   <div class="panel" id="panel-ru">
-    <input class="search-bar ru" type="text" placeholder="Поиск по адресу, протоколу, тегу..." oninput="filterTable(this, 'tbl-ru')">
+    <input class="search-bar ru" type="text" placeholder="Поиск по адресу, протоколу, тегу..." data-table="tbl-ru">
     <div class="table-wrap">
       <table id="tbl-ru">
         <thead>
@@ -868,32 +868,70 @@ footer {{
 
 </div>
 
-<div id="toast">✓ Скопировано!</div>
+<div id="toast">&#10003; Скопировано!</div>
 <footer>VPN.Scout — автоматическая проверка серверов каждый час</footer>
 
 <script>
-function switchTab(name, btn) {{
-  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-  document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
-  btn.classList.add('active');
-  document.getElementById('panel-' + name).classList.add('active');
-}}
-function filterTable(input, tableId) {{
-  const q = input.value.toLowerCase();
-  document.querySelectorAll('#' + tableId + ' tbody tr').forEach(row => {{
-    row.style.display = row.textContent.toLowerCase().includes(q) ? '' : 'none';
+(function() {{
+  // Tab switching
+  document.querySelectorAll('.tab[data-tab]').forEach(function(btn) {{
+    btn.addEventListener('click', function() {{
+      var name = btn.getAttribute('data-tab');
+      document.querySelectorAll('.tab').forEach(function(t) {{ t.classList.remove('active'); }});
+      document.querySelectorAll('.panel').forEach(function(p) {{ p.classList.remove('active'); }});
+      btn.classList.add('active');
+      var panel = document.getElementById('panel-' + name);
+      if (panel) panel.classList.add('active');
+    }});
   }});
-}}
-function copyUrl(btn) {{
-  navigator.clipboard.writeText(btn.dataset.url).then(() => {{
+
+  // Search/filter
+  document.querySelectorAll('.search-bar[data-table]').forEach(function(input) {{
+    input.addEventListener('input', function() {{
+      var q = input.value.toLowerCase();
+      var tableId = input.getAttribute('data-table');
+      document.querySelectorAll('#' + tableId + ' tbody tr').forEach(function(row) {{
+        row.style.display = row.textContent.toLowerCase().indexOf(q) !== -1 ? '' : 'none';
+      }});
+    }});
+  }});
+
+  // Copy buttons
+  document.addEventListener('click', function(e) {{
+    var btn = e.target.closest('.copy-btn');
+    if (!btn) return;
+    var url = btn.getAttribute('data-url');
+    if (!url) return;
+    if (navigator.clipboard && navigator.clipboard.writeText) {{
+      navigator.clipboard.writeText(url).then(function() {{
+        showCopied(btn);
+      }}).catch(function() {{
+        fallbackCopy(url, btn);
+      }});
+    }} else {{
+      fallbackCopy(url, btn);
+    }}
+  }});
+
+  function showCopied(btn) {{
     btn.classList.add('copied');
-    btn.textContent = '✓';
-    setTimeout(() => {{ btn.classList.remove('copied'); btn.textContent = '⎘'; }}, 1500);
-    const toast = document.getElementById('toast');
-    toast.classList.add('show');
-    setTimeout(() => toast.classList.remove('show'), 2000);
-  }});
-}}
+    btn.textContent = '\u2713';
+    var toast = document.getElementById('toast');
+    if (toast) {{ toast.classList.add('show'); setTimeout(function() {{ toast.classList.remove('show'); }}, 2000); }}
+    setTimeout(function() {{ btn.classList.remove('copied'); btn.textContent = '\u2398'; }}, 1500);
+  }}
+
+  function fallbackCopy(text, btn) {{
+    var ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.position = 'fixed';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.select();
+    try {{ document.execCommand('copy'); showCopied(btn); }} catch(e) {{}}
+    document.body.removeChild(ta);
+  }}
+}})();
 </script>
 </body>
 </html>"""
