@@ -29,28 +29,10 @@ TEST_URLS = [
     "http://cp.cloudflare.com/",
 ]
 
-# Источники разделены на две группы:
-# INT_SOURCES — обычные зарубежные серверы (идут первыми в итоговом файле)
-# RU_SOURCES  — конфиги заточены под Россию (обход белых списков, SNI-RU и т.д.)
-
-INT_SOURCES = [
-    "https://raw.githubusercontent.com/yebekhe/TelegramV2rayCollector/main/sub/base64/mix",
-    "https://raw.githubusercontent.com/mahdibland/V2RayAggregator/master/Eternity.txt",
-    "https://raw.githubusercontent.com/mfuu/v2ray/master/v2ray",
-    "https://raw.githubusercontent.com/peasoft/NoMoreWalls/master/list.txt",
-    "https://raw.githubusercontent.com/aiboboxx/v2rayfree/main/v2",
-    "https://raw.githubusercontent.com/soroushmirzaei/telegram-configs-collector/main/splitted/mixed",
-    "https://raw.githubusercontent.com/Surfboardv2ray/TGParse/main/splitted/mixed",
-    "https://raw.githubusercontent.com/Pawdroid/Free-servers/main/sub",
-    "https://raw.githubusercontent.com/barry-far/V2ray-Configs/main/Sub1.txt",
-    "https://raw.githubusercontent.com/barry-far/V2ray-Configs/main/Sub2.txt",
-    "https://raw.githubusercontent.com/barry-far/V2ray-Configs/main/Sub3.txt",
-    "https://raw.githubusercontent.com/liketolivefree/kobabi/main/sub.txt",
-    "https://raw.githubusercontent.com/tbbatbb/Proxy/master/dist/v2ray.config.txt",
-    "https://raw.githubusercontent.com/Everyday-VPN/Everyday-VPN/main/subscription/main.txt",
-]
-
-RU_SOURCES = [
+# Единый список источников — все твои ссылки.
+# Разделение на «зарубежные» и «российские» делается по IP/домену самого сервера
+# внутри конфига (функция _is_russian_server), а не по источнику.
+SOURCES = [
     "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/BLACK_VLESS_RUS.txt",
     "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/BLACK_VLESS_RUS_mobile.txt",
     "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/BLACK_SS+All_RUS.txt",
@@ -478,29 +460,22 @@ def _fetch_with_retry(url: str, retries: int = 3, delay: float = 2.0) -> str | N
 
 
 def fetch_configs() -> tuple[list[str], set[str]]:
-    """Возвращает (список уникальных конфигов, множество конфигов из RU_SOURCES)"""
+    """Возвращает (список уникальных конфигов, множество host:port российских серверов).
+    Разделение RU/INT — по IP/домену самого сервера (_is_russian_server), не по источнику."""
     all_raw: list[str] = []
-    ru_urls: set[str]  = set()   # ключи host:port из RU_SOURCES
+    ru_keys: set[str]  = set()
 
-    for source_url in INT_SOURCES + RU_SOURCES:
-        is_ru_source = source_url in RU_SOURCES
+    for source_url in SOURCES:
         raw_text = _fetch_with_retry(source_url)
         if raw_text is None:
             continue
         text  = _decode_subscription(raw_text)
         found = PROTO_REGEX.findall(text)
         fmt   = "plain" if text is raw_text else "base64"
-        tag   = "[RU]" if is_ru_source else "[INT]"
-        print(f"  [OK] {source_url}  →  {len(found)} конфигов  [{fmt}] {tag}")
+        print(f"  [OK] {source_url}  →  {len(found)} конфигов  [{fmt}]")
+        all_raw.extend(found)
 
-        for cfg in found:
-            all_raw.append(cfg)
-            if is_ru_source:
-                host, port = _extract_host_port(cfg)
-                if host and port:
-                    ru_urls.add(f"{host}:{port}")
-
-    # Дедупликация по хосту:порту (RU побеждает при совпадении)
+    # Дедупликация по хосту:порту
     seen_endpoints: set[str] = set()
     unique: list[str] = []
     for cfg in all_raw:
@@ -510,10 +485,12 @@ def fetch_configs() -> tuple[list[str], set[str]]:
             if key not in seen_endpoints:
                 seen_endpoints.add(key)
                 unique.append(cfg)
+                if _is_russian_server(host):
+                    ru_keys.add(key)
         else:
             unique.append(cfg)
 
-    return unique, ru_urls
+    return unique, ru_keys
 
 
 # ============================================================
@@ -768,7 +745,7 @@ def run():
     # Сортируем все результаты по score (avg + jitter/2)
     results.sort(key=lambda x: x[1])
 
-    # Делим по источнику: RU_SOURCES → [RU], INT_SOURCES → без тега
+    # Делим по адресу сервера: российские (_is_russian_server) → вниз, остальные → вверх
     intl_all = []
     ru_all   = []
     for entry in results:
