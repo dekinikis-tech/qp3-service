@@ -42,14 +42,6 @@ RU_SOURCES = [
     "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/WHITE-SNI-RU-all.txt",
     "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/Vless-Reality-White-Lists-Rus-Mobile.txt",
 ]
-
-INT_SOURCES = [
-    "https://raw.githubusercontent.com/barry-far/V2ray-config/main/Splitted-By-Protocol/vless.txt",
-    "https://raw.githubusercontent.com/barry-far/V2ray-config/main/Splitted-By-Protocol/trojan.txt",
-]
-
-SOURCES = RU_SOURCES + INT_SOURCES
-
 BLACK_LIST = [
     'meshky', '4mohsen', 'white', '708087',
     'oneclick', '4jadi', '4kian', 'yandex.net', 'vk-apps.com',
