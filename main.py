@@ -651,10 +651,11 @@ header {{
 .stat-label {{ color: var(--subtext); font-size: 11px; text-transform: uppercase; letter-spacing: .05em; }}
 .tabs {{
   display: flex;
-  gap: 4px;
+  flex-wrap: wrap;
+  gap: 8px;
   margin-bottom: 20px;
   background: var(--surface);
-  padding: 4px;
+  padding: 8px;
   border-radius: var(--radius);
   border: 1px solid var(--border);
   width: fit-content;
@@ -662,27 +663,33 @@ header {{
 .tab {{
   padding: 10px 28px;
   border-radius: 7px;
-  border: none;
-  background: transparent;
-  color: var(--subtext);
+  border: 1px solid var(--border);
+  background: rgba(255,255,255,.05);
+  color: var(--text);
   font-family: var(--display);
   font-weight: 700;
   font-size: 14px;
   cursor: pointer;
   transition: all .2s;
   white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  line-height: 1;
 }}
 .tab.active {{
   color: #000;
   background: var(--accent);
+  border-color: var(--accent);
   box-shadow: 0 0 16px rgba(0,229,255,.3);
 }}
 .tab.tab-ru.active {{
   color: #fff;
   background: var(--accent2);
+  border-color: var(--accent2);
   box-shadow: 0 0 16px rgba(255,107,53,.3);
 }}
-.tab:hover:not(.active) {{ color: var(--text); }}
+.tab:hover:not(.active) {{ background: rgba(255,255,255,.1); color: #fff; }}
 .panel {{ display: none; }}
 .panel.active {{ display: block; }}
 .search-bar {{
@@ -872,6 +879,7 @@ footer {{
 <footer>VPN.Scout — автоматическая проверка серверов каждый час</footer>
 
 <script>
+document.addEventListener('DOMContentLoaded', function() {{
 (function() {{
   // Tab switching
   document.querySelectorAll('.tab[data-tab]').forEach(function(btn) {{
@@ -932,6 +940,7 @@ footer {{
     document.body.removeChild(ta);
   }}
 }})();
+}}); // DOMContentLoaded
 </script>
 </body>
 </html>"""
