@@ -167,6 +167,11 @@ def tcp_alive(url: str) -> str | None:
     address, port = _extract_host_port(url)
     if address is None:
         return None
+        
+    # ИСПРАВЛЕНИЕ: Отсекаем мусорные данные, чтобы избежать UnicodeError(label too long)
+    if len(address) > 253:
+        return None
+        
     if _is_ipv6_address(address):
         return None
     if address.startswith(BLOCKED_IPS):
@@ -177,7 +182,8 @@ def tcp_alive(url: str) -> str | None:
     try:
         with socket.create_connection((address, port), timeout=TCP_TIMEOUT):
             return url
-    except OSError:
+    # ИСПРАВЛЕНИЕ: Ловим UnicodeError и ValueError, чтобы скрипт не падал из-за битых доменов
+    except (OSError, UnicodeError, ValueError):
         return None
 
 
@@ -818,10 +824,16 @@ def run():
         with open(VIEWER_FILE, "r", encoding="utf-8") as f:
             html_content = f.read()
 
-        token_res = subprocess.run(
-            ["gh", "auth", "token"], capture_output=True, text=True
-        )
-        token = token_res.stdout.strip()
+        # ИСПРАВЛЕНИЕ: Читаем токен сразу из окружения, чтобы избежать сбоев gh в Actions
+        token = os.environ.get('GH_TOKEN')
+        if not token:
+            try:
+                token_res = subprocess.run(
+                    ["gh", "auth", "token"], capture_output=True, text=True
+                )
+                token = token_res.stdout.strip()
+            except Exception:
+                token = None
 
         if token:
             payload = json.dumps({
@@ -851,7 +863,7 @@ def run():
             except Exception as e:
                 print(f"❌ Gist ошибка: {e}")
         else:
-            print("❌ Не удалось получить токен через gh auth token")
+            print("❌ Не удалось получить токен GitHub (GH_TOKEN)!")
     else:
         print("⚠️  MY_GIST_ID не задан.")
 
