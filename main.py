@@ -505,6 +505,11 @@ def _get_network(url: str) -> str:
 
 def generate_html_viewer(intl_results: list, ru_results: list, elapsed: int) -> str:
 
+    def ping_color(avg):
+        if avg < 300:   return '#06d6a0'
+        if avg < 1000:  return '#ffd166'
+        return '#ef476f'
+
     def make_rows(results):
         rows = []
         for i, (url, score, avg, jitter, losses) in enumerate(results, 1):
@@ -512,24 +517,26 @@ def generate_html_viewer(intl_results: list, ru_results: list, elapsed: int) -> 
             security = _get_security(url)
             network  = _get_network(url)
             host, _  = _extract_host_port(url)
-            tag      = urllib.parse.unquote(url.split('#')[-1])[:35] if '#' in url else ''
+            tag      = urllib.parse.unquote(url.split('#')[-1])[:40] if '#' in url else (host or '')[:40]
             is_ru    = _is_russian_server(host or '')
-            flag     = '🇷🇺' if is_ru else '🌍'
-            ping_cls = 'ping-good' if avg < 300 else ('ping-mid' if avg < 1000 else 'ping-bad')
+            flag     = '\U0001f1f7\U0001f1fa' if is_ru else '\U0001f30d'
             loss_pct = int(losses / PING_ROUNDS * 100)
-            safe_url = url.replace('"', '&quot;').replace('<', '&lt;')
-            rows.append(f"""
-            <tr>
-              <td class="num">{i}</td>
-              <td>{flag} <span class="tag">{tag or (host or '')[:30]}</span></td>
-              <td><span class="badge badge-{proto.lower()}">{proto}</span></td>
-              <td><span class="badge badge-net">{network}</span></td>
-              <td><span class="badge badge-sec">{security}</span></td>
-              <td class="{ping_cls}">{avg}мс</td>
-              <td class="jitter">{jitter}мс</td>
-              <td class="{'loss-ok' if loss_pct == 0 else 'loss-bad'}">{loss_pct}%</td>
-              <td><button class="copy-btn" data-url="{safe_url}">&#x2398;</button></td>
-            </tr>""")
+            pc       = ping_color(avg)
+            safe_url = url.replace('&', '&amp;').replace('"', '&quot;').replace('<', '&lt;').replace("'", '&#39;')
+            safe_tag = tag.replace('<', '&lt;').replace('>', '&gt;')
+            rows.append(
+                f'<tr style="border-bottom:1px solid #1e2230">'
+                f'<td style="padding:9px 10px;color:#4a5568;width:36px">{i}</td>'
+                f'<td style="padding:9px 10px;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{flag} {safe_tag}</td>'
+                f'<td style="padding:9px 10px"><span style="background:#0d2b33;color:#00e5ff;border:1px solid #005f6b;border-radius:4px;padding:2px 7px;font-size:11px;font-weight:700">{proto}</span></td>'
+                f'<td style="padding:9px 10px"><span style="background:#1a1f2e;color:#9aa0b4;border:1px solid #2a3040;border-radius:4px;padding:2px 7px;font-size:11px">{network}</span></td>'
+                f'<td style="padding:9px 10px"><span style="background:#1a1f2e;color:#9aa0b4;border:1px solid #2a3040;border-radius:4px;padding:2px 7px;font-size:11px">{security}</span></td>'
+                f'<td style="padding:9px 10px;color:{pc};font-weight:700">{avg}ms</td>'
+                f'<td style="padding:9px 10px;color:#718096">{jitter}ms</td>'
+                f'<td style="padding:9px 10px;color:{"#06d6a0" if loss_pct==0 else "#ef476f"}">{loss_pct}%</td>'
+                f'<td style="padding:9px 10px"><button onclick="copyVpn(this)" data-url="{safe_url}" style="background:#0d2b33;border:1px solid #005f6b;color:#00e5ff;border-radius:5px;padding:4px 10px;cursor:pointer;font-size:13px">Copy</button></td>'
+                f'</tr>'
+            )
         return '\n'.join(rows)
 
     intl_rows = make_rows(intl_results)
@@ -544,403 +551,114 @@ def generate_html_viewer(intl_results: list, ru_results: list, elapsed: int) -> 
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>VPN Scout</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&family=Syne:wght@400;700;800&display=swap" rel="stylesheet">
 <style>
-:root {{
-  --bg:      #0a0c10;
-  --surface: #111318;
-  --border:  #1e2230;
-  --accent:  #00e5ff;
-  --accent2: #ff6b35;
-  --gold:    #ffd166;
-  --green:   #06d6a0;
-  --red:     #ef476f;
-  --muted:   #4a5568;
-  --text:    #e2e8f0;
-  --subtext: #718096;
-  --radius:  10px;
-  --mono:    'JetBrains Mono', monospace;
-  --display: 'Syne', sans-serif;
+body {{ margin:0; padding:0; background:#0a0c10; color:#e2e8f0; font-family:Arial,sans-serif; font-size:13px; }}
+h1 {{ margin:0; padding:20px 20px 0; font-size:24px; color:#fff; }}
+.info {{ padding:8px 20px 16px; color:#718096; font-size:12px; }}
+.info b {{ color:#00e5ff; }}
+.stats-row {{ display:table; width:100%; border-collapse:separate; border-spacing:10px; padding:0 10px 10px; box-sizing:border-box; }}
+.stat {{ display:table-cell; background:#111318; border:1px solid #1e2230; border-radius:8px; padding:14px 18px; text-align:center; }}
+.stat-num {{ font-size:26px; font-weight:700; color:#fff; }}
+.stat-lbl {{ font-size:11px; color:#718096; margin-top:4px; }}
+.tab-bar {{ padding:10px 20px; }}
+.tab-btn {{
+  display:inline-block;
+  padding:10px 30px;
+  margin-right:8px;
+  border-radius:8px;
+  border:2px solid #1e2230;
+  background:#111318;
+  color:#e2e8f0;
+  font-size:14px;
+  font-weight:700;
+  cursor:pointer;
+  text-decoration:none;
 }}
-*, *::before, *::after {{ box-sizing: border-box; margin: 0; padding: 0; }}
-body {{
-  background: var(--bg);
-  color: var(--text);
-  font-family: var(--mono);
-  font-size: 13px;
-  min-height: 100vh;
-  overflow-x: hidden;
-}}
-body::before {{
-  content: '';
-  position: fixed;
-  inset: 0;
-  background-image:
-    linear-gradient(rgba(0,229,255,.03) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(0,229,255,.03) 1px, transparent 1px);
-  background-size: 40px 40px;
-  pointer-events: none;
-  z-index: 0;
-}}
-.container {{
-  position: relative;
-  z-index: 1;
-  max-width: 1300px;
-  margin: 0 auto;
-  padding: 40px 20px 80px;
-}}
-header {{
-  display: flex;
-  align-items: flex-end;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: 16px;
-  margin-bottom: 40px;
-  padding-bottom: 24px;
-  border-bottom: 1px solid var(--border);
-}}
-.logo {{
-  font-family: var(--display);
-  font-weight: 800;
-  font-size: 32px;
-  letter-spacing: -1px;
-  color: #fff;
-  line-height: 1;
-}}
-.logo span {{ color: var(--accent); }}
-.meta {{
-  text-align: right;
-  color: var(--subtext);
-  font-size: 11px;
-  line-height: 1.7;
-}}
-.meta strong {{ color: var(--accent); }}
-.stats {{
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
-  gap: 12px;
-  margin-bottom: 40px;
-}}
-.stat {{
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 16px 20px;
-  position: relative;
-  overflow: hidden;
-}}
-.stat::before {{
-  content: '';
-  position: absolute;
-  top: 0; left: 0; right: 0;
-  height: 2px;
-  background: var(--accent);
-}}
-.stat:nth-child(2)::before {{ background: var(--accent2); }}
-.stat:nth-child(3)::before {{ background: var(--green); }}
-.stat:nth-child(4)::before {{ background: var(--gold); }}
-.stat-val {{
-  font-family: var(--display);
-  font-size: 28px;
-  font-weight: 800;
-  color: #fff;
-  line-height: 1;
-  margin-bottom: 4px;
-}}
-.stat-label {{ color: var(--subtext); font-size: 11px; text-transform: uppercase; letter-spacing: .05em; }}
-.tabs {{
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin-bottom: 20px;
-  background: var(--surface);
-  padding: 8px;
-  border-radius: var(--radius);
-  border: 1px solid var(--border);
-  width: fit-content;
-}}
-.tab {{
-  padding: 10px 28px;
-  border-radius: 7px;
-  border: 1px solid var(--border);
-  background: rgba(255,255,255,.05);
-  color: var(--text);
-  font-family: var(--display);
-  font-weight: 700;
-  font-size: 14px;
-  cursor: pointer;
-  transition: all .2s;
-  white-space: nowrap;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  line-height: 1;
-}}
-.tab.active {{
-  color: #000;
-  background: var(--accent);
-  border-color: var(--accent);
-  box-shadow: 0 0 16px rgba(0,229,255,.3);
-}}
-.tab.tab-ru.active {{
-  color: #fff;
-  background: var(--accent2);
-  border-color: var(--accent2);
-  box-shadow: 0 0 16px rgba(255,107,53,.3);
-}}
-.tab:hover:not(.active) {{ background: rgba(255,255,255,.1); color: #fff; }}
-.panel {{ display: none; }}
-.panel.active {{ display: block; }}
-.search-bar {{
-  width: 100%;
-  max-width: 400px;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  color: var(--text);
-  font-family: var(--mono);
-  font-size: 13px;
-  padding: 10px 16px;
-  margin-bottom: 16px;
-  outline: none;
-  transition: border-color .2s;
-}}
-.search-bar:focus {{ border-color: var(--accent); }}
-.search-bar.ru:focus {{ border-color: var(--accent2); }}
-.table-wrap {{
-  overflow-x: auto;
-  border-radius: var(--radius);
-  border: 1px solid var(--border);
-}}
-table {{
-  width: 100%;
-  border-collapse: collapse;
-  background: var(--surface);
-}}
-thead th {{
-  background: #0d1017;
-  color: var(--subtext);
-  font-size: 10px;
-  text-transform: uppercase;
-  letter-spacing: .1em;
-  padding: 12px 14px;
-  text-align: left;
-  border-bottom: 1px solid var(--border);
-  white-space: nowrap;
-  font-weight: 600;
-}}
-tbody tr {{
-  border-bottom: 1px solid var(--border);
-  transition: background .15s;
-}}
-tbody tr:last-child {{ border-bottom: none; }}
-tbody tr:hover {{ background: rgba(0,229,255,.03); }}
-td {{
-  padding: 11px 14px;
-  vertical-align: middle;
-  white-space: nowrap;
-}}
-.num {{ color: var(--muted); width: 40px; }}
-.tag {{
-  color: var(--text);
-  max-width: 200px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  display: inline-block;
-  vertical-align: middle;
-}}
-.badge {{
-  display: inline-block;
-  padding: 2px 8px;
-  border-radius: 4px;
-  font-size: 10px;
-  font-weight: 600;
-  letter-spacing: .04em;
-  text-transform: uppercase;
-}}
-.badge-vless     {{ background: rgba(0,229,255,.12);   color: var(--accent);  border: 1px solid rgba(0,229,255,.2); }}
-.badge-trojan    {{ background: rgba(255,107,53,.12);  color: var(--accent2); border: 1px solid rgba(255,107,53,.2); }}
-.badge-hysteria2 {{ background: rgba(255,209,102,.12); color: var(--gold);    border: 1px solid rgba(255,209,102,.2); }}
-.badge-ss        {{ background: rgba(6,214,160,.12);   color: var(--green);   border: 1px solid rgba(6,214,160,.2); }}
-.badge-net       {{ background: rgba(255,255,255,.05); color: var(--subtext); border: 1px solid var(--border); }}
-.badge-sec       {{ background: rgba(255,255,255,.05); color: var(--subtext); border: 1px solid var(--border); }}
-.ping-good {{ color: var(--green); font-weight: 600; }}
-.ping-mid  {{ color: var(--gold);  font-weight: 600; }}
-.ping-bad  {{ color: var(--red);   font-weight: 600; }}
-.jitter    {{ color: var(--subtext); }}
-.loss-ok   {{ color: var(--green); }}
-.loss-bad  {{ color: var(--red); font-weight: 600; }}
-.copy-btn {{
-  background: rgba(0,229,255,.08);
-  border: 1px solid rgba(0,229,255,.15);
-  color: var(--accent);
-  border-radius: 5px;
-  padding: 4px 9px;
-  cursor: pointer;
-  font-size: 14px;
-  transition: all .15s;
-}}
-.copy-btn:hover  {{ background: rgba(0,229,255,.18); }}
-.copy-btn.copied {{ color: var(--green); border-color: var(--green); }}
-#toast {{
-  position: fixed;
-  bottom: 30px; right: 30px;
-  background: var(--green);
-  color: #000;
-  font-family: var(--display);
-  font-weight: 700;
-  font-size: 13px;
-  padding: 10px 20px;
-  border-radius: 8px;
-  opacity: 0;
-  transform: translateY(10px);
-  transition: all .25s;
-  pointer-events: none;
-  z-index: 999;
-}}
-#toast.show {{ opacity: 1; transform: translateY(0); }}
-footer {{
-  margin-top: 60px;
-  padding-top: 24px;
-  border-top: 1px solid var(--border);
-  color: var(--muted);
-  font-size: 11px;
-  text-align: center;
-}}
+.tab-btn.active-intl {{ background:#00e5ff; color:#000; border-color:#00e5ff; }}
+.tab-btn.active-ru  {{ background:#ff6b35; color:#fff; border-color:#ff6b35; }}
+.tab-btn:hover {{ border-color:#718096; }}
+.section {{ display:none; padding:0 20px 40px; }}
+.section.visible {{ display:block; }}
+.tbl-wrap {{ overflow-x:auto; border:1px solid #1e2230; border-radius:8px; }}
+table {{ width:100%; border-collapse:collapse; background:#111318; }}
+thead th {{ background:#0d1017; color:#718096; font-size:10px; text-transform:uppercase; padding:11px 12px; text-align:left; border-bottom:1px solid #1e2230; white-space:nowrap; }}
+tbody tr:hover {{ background:#161b26; }}
+#toast {{ position:fixed; bottom:24px; right:24px; background:#06d6a0; color:#000; font-weight:700; font-size:13px; padding:10px 20px; border-radius:8px; opacity:0; transition:opacity .3s; pointer-events:none; z-index:999; }}
+#toast.show {{ opacity:1; }}
 </style>
 </head>
 <body>
-<div class="container">
 
-  <header>
-    <div class="logo">VPN<span>.</span>Scout</div>
-    <div class="meta">
-      Обновлено: <strong>{updated}</strong><br>
-      Время проверки: <strong>{elapsed}с</strong>
-    </div>
-  </header>
+<h1>VPN Scout</h1>
+<div class="info">Обновлено: <b>{updated}</b> &nbsp;|&nbsp; Время проверки: <b>{elapsed}с</b></div>
 
-  <div class="stats">
-    <div class="stat">
-      <div class="stat-val">{len(intl_results)}</div>
-      <div class="stat-label">🌍 Зарубежных</div>
-    </div>
-    <div class="stat">
-      <div class="stat-val">{len(ru_results)}</div>
-      <div class="stat-label">🇷🇺 Российских</div>
-    </div>
-    <div class="stat">
-      <div class="stat-val">{total}</div>
-      <div class="stat-label">Всего живых</div>
-    </div>
-    <div class="stat">
-      <div class="stat-val">{best_ping}мс</div>
-      <div class="stat-label">Лучший пинг</div>
-    </div>
-  </div>
-
-  <div class="tabs">
-    <button class="tab active" data-tab="intl">🌍 Зарубежные ({len(intl_results)})</button>
-    <button class="tab tab-ru" data-tab="ru">🇷🇺 Российские ({len(ru_results)})</button>
-  </div>
-
-  <div class="panel active" id="panel-intl">
-    <input class="search-bar" type="text" placeholder="Поиск по адресу, протоколу, тегу..." data-table="tbl-intl">
-    <div class="table-wrap">
-      <table id="tbl-intl">
-        <thead>
-          <tr><th>#</th><th>Сервер</th><th>Протокол</th><th>Транспорт</th><th>Безопасность</th><th>Пинг</th><th>Jitter</th><th>Loss</th><th></th></tr>
-        </thead>
-        <tbody>
-          {intl_rows if intl_rows else '<tr><td colspan="9" style="text-align:center;color:var(--subtext);padding:40px">Нет зарубежных серверов</td></tr>'}
-        </tbody>
-      </table>
-    </div>
-  </div>
-
-  <div class="panel" id="panel-ru">
-    <input class="search-bar ru" type="text" placeholder="Поиск по адресу, протоколу, тегу..." data-table="tbl-ru">
-    <div class="table-wrap">
-      <table id="tbl-ru">
-        <thead>
-          <tr><th>#</th><th>Сервер</th><th>Протокол</th><th>Транспорт</th><th>Безопасность</th><th>Пинг</th><th>Jitter</th><th>Loss</th><th></th></tr>
-        </thead>
-        <tbody>
-          {ru_rows if ru_rows else '<tr><td colspan="9" style="text-align:center;color:var(--subtext);padding:40px">Нет российских серверов</td></tr>'}
-        </tbody>
-      </table>
-    </div>
-  </div>
-
+<div class="stats-row">
+  <div class="stat"><div class="stat-num" style="color:#00e5ff">{len(intl_results)}</div><div class="stat-lbl">🌍 Зарубежных</div></div>
+  <div class="stat"><div class="stat-num" style="color:#ff6b35">{len(ru_results)}</div><div class="stat-lbl">🇷🇺 Российских</div></div>
+  <div class="stat"><div class="stat-num">{total}</div><div class="stat-lbl">Всего живых</div></div>
+  <div class="stat"><div class="stat-num" style="color:#06d6a0">{best_ping}ms</div><div class="stat-lbl">Лучший пинг</div></div>
 </div>
 
-<div id="toast">&#10003; Скопировано!</div>
-<footer>VPN.Scout — автоматическая проверка серверов каждый час</footer>
+<div class="tab-bar">
+  <button class="tab-btn active-intl" id="btn-intl" onclick="showTab('intl')">🌍 Зарубежные ({len(intl_results)})</button>
+  <button class="tab-btn" id="btn-ru" onclick="showTab('ru')">🇷🇺 Российские ({len(ru_results)})</button>
+</div>
+
+<div class="section visible" id="sec-intl">
+  <div class="tbl-wrap">
+    <table>
+      <thead><tr><th>#</th><th>Сервер</th><th>Протокол</th><th>Транспорт</th><th>Безопасность</th><th>Пинг</th><th>Jitter</th><th>Loss</th><th></th></tr></thead>
+      <tbody>
+        {intl_rows if intl_rows else '<tr><td colspan="9" style="text-align:center;padding:30px;color:#718096">Нет серверов</td></tr>'}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<div class="section" id="sec-ru">
+  <div class="tbl-wrap">
+    <table>
+      <thead><tr><th>#</th><th>Сервер</th><th>Протокол</th><th>Транспорт</th><th>Безопасность</th><th>Пинг</th><th>Jitter</th><th>Loss</th><th></th></tr></thead>
+      <tbody>
+        {ru_rows if ru_rows else '<tr><td colspan="9" style="text-align:center;padding:30px;color:#718096">Нет серверов</td></tr>'}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<div id="toast">Скопировано!</div>
 
 <script>
-document.addEventListener('DOMContentLoaded', function() {{
-(function() {{
-  // Tab switching
-  document.querySelectorAll('.tab[data-tab]').forEach(function(btn) {{
-    btn.addEventListener('click', function() {{
-      var name = btn.getAttribute('data-tab');
-      document.querySelectorAll('.tab').forEach(function(t) {{ t.classList.remove('active'); }});
-      document.querySelectorAll('.panel').forEach(function(p) {{ p.classList.remove('active'); }});
-      btn.classList.add('active');
-      var panel = document.getElementById('panel-' + name);
-      if (panel) panel.classList.add('active');
-    }});
-  }});
-
-  // Search/filter
-  document.querySelectorAll('.search-bar[data-table]').forEach(function(input) {{
-    input.addEventListener('input', function() {{
-      var q = input.value.toLowerCase();
-      var tableId = input.getAttribute('data-table');
-      document.querySelectorAll('#' + tableId + ' tbody tr').forEach(function(row) {{
-        row.style.display = row.textContent.toLowerCase().indexOf(q) !== -1 ? '' : 'none';
-      }});
-    }});
-  }});
-
-  // Copy buttons
-  document.addEventListener('click', function(e) {{
-    var btn = e.target.closest('.copy-btn');
-    if (!btn) return;
-    var url = btn.getAttribute('data-url');
-    if (!url) return;
-    if (navigator.clipboard && navigator.clipboard.writeText) {{
-      navigator.clipboard.writeText(url).then(function() {{
-        showCopied(btn);
-      }}).catch(function() {{
-        fallbackCopy(url, btn);
-      }});
-    }} else {{
-      fallbackCopy(url, btn);
-    }}
-  }});
-
-  function showCopied(btn) {{
-    btn.classList.add('copied');
-    btn.textContent = '\u2713';
-    var toast = document.getElementById('toast');
-    if (toast) {{ toast.classList.add('show'); setTimeout(function() {{ toast.classList.remove('show'); }}, 2000); }}
-    setTimeout(function() {{ btn.classList.remove('copied'); btn.textContent = '\u2398'; }}, 1500);
-  }}
-
-  function fallbackCopy(text, btn) {{
-    var ta = document.createElement('textarea');
-    ta.value = text;
-    ta.style.position = 'fixed';
-    ta.style.opacity = '0';
-    document.body.appendChild(ta);
-    ta.select();
-    try {{ document.execCommand('copy'); showCopied(btn); }} catch(e) {{}}
-    document.body.removeChild(ta);
-  }}
-}})();
-}}); // DOMContentLoaded
+function showTab(name) {{
+  document.getElementById('sec-intl').className = 'section' + (name === 'intl' ? ' visible' : '');
+  document.getElementById('sec-ru').className   = 'section' + (name === 'ru'   ? ' visible' : '');
+  document.getElementById('btn-intl').className = 'tab-btn' + (name === 'intl' ? ' active-intl' : '');
+  document.getElementById('btn-ru').className   = 'tab-btn' + (name === 'ru'   ? ' active-ru'   : '');
+}}
+function copyVpn(btn) {{
+  var url = btn.getAttribute('data-url');
+  var ta = document.createElement('textarea');
+  ta.value = url;
+  ta.style.position = 'fixed';
+  ta.style.left = '-9999px';
+  document.body.appendChild(ta);
+  ta.select();
+  try {{
+    document.execCommand('copy');
+    btn.textContent = 'OK!';
+    btn.style.color = '#06d6a0';
+    btn.style.borderColor = '#06d6a0';
+    var t = document.getElementById('toast');
+    t.className = 'show';
+    setTimeout(function() {{
+      btn.textContent = 'Copy';
+      btn.style.color = '#00e5ff';
+      btn.style.borderColor = '#005f6b';
+      t.className = '';
+    }}, 1500);
+  }} catch(e) {{ alert('Не удалось скопировать'); }}
+  document.body.removeChild(ta);
+}}
 </script>
 </body>
 </html>"""
@@ -1047,8 +765,18 @@ def run():
             name = urllib.parse.unquote(url.split('#')[-1])[:40] if '#' in url else url[8:48]
             print(f"  {i:<3} {avg:>5}мс  jitter:{jitter:>4}мс  loss:{losses}/{PING_ROUNDS}  {name}")
 
-    # Записываем plain-текст
-    final_urls = [r[0] for r in ordered]
+    # Добавляем префикс [INT] / [RU] к имени сервера (тег после #)
+    def tag_url(url: str, prefix: str) -> str:
+        if '#' in url:
+            base, tag = url.rsplit('#', 1)
+            tag_decoded = urllib.parse.unquote(tag)
+            return f"{base}#{urllib.parse.quote(prefix + ' ' + tag_decoded)}"
+        return f"{url}#{urllib.parse.quote(prefix)}"
+
+    tagged_intl = [tag_url(r[0], '[INT]') for r in intl_results]
+    tagged_ru   = [tag_url(r[0], '[RU]')  for r in ru_results]
+    final_urls  = tagged_intl + tagged_ru
+
     with open(FILE_NAME, "w", encoding="utf-8") as f:
         f.write("\n".join(final_urls))
     print(f"\n✅ Сохранено {len(final_urls)} серверов в {FILE_NAME}")
