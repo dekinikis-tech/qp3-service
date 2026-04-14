@@ -125,11 +125,9 @@ for _p in range(25000, 25000 + XRAY_WORKERS):
 
 def _is_russian_server(address: str) -> bool:
     """Определяет, является ли сервер российским по IP или домену."""
-    # Проверяем домен
     addr_lower = address.lower()
     if any(kw in addr_lower for kw in RU_DOMAIN_KEYWORDS):
         return True
-    # Проверяем IP-диапазоны
     if address[0].isdigit():  # это IP, не домен
         if address.startswith(RU_IP_PREFIXES):
             return True
@@ -598,7 +596,6 @@ body {{
   overflow-x: hidden;
 }}
 
-/* Сетка-фон */
 body::before {{
   content: '';
   position: fixed;
@@ -619,7 +616,6 @@ body::before {{
   padding: 40px 20px 80px;
 }}
 
-/* ── ШАПКА ── */
 header {{
   display: flex;
   align-items: flex-end;
@@ -651,7 +647,6 @@ header {{
 
 .meta strong {{ color: var(--accent); }}
 
-/* ── СТАТИСТИКА ── */
 .stats {{
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
@@ -692,7 +687,6 @@ header {{
 
 .stat-label {{ color: var(--subtext); font-size: 11px; text-transform: uppercase; letter-spacing: .05em; }}
 
-/* ── ТАБЫ ── */
 .tabs {{
   display: flex;
   gap: 4px;
@@ -730,11 +724,9 @@ header {{
 
 .tab:hover:not(.active) {{ color: var(--text); }}
 
-/* ── ПАНЕЛИ ── */
 .panel {{ display: none; }}
 .panel.active {{ display: block; }}
 
-/* ── ПОИСК ── */
 .search-bar {{
   width: 100%;
   max-width: 400px;
@@ -753,7 +745,6 @@ header {{
 .search-bar:focus {{ border-color: var(--accent); }}
 .search-bar.ru:focus {{ border-color: var(--accent2); }}
 
-/* ── ТАБЛИЦА ── */
 .table-wrap {{
   overflow-x: auto;
   border-radius: var(--radius);
@@ -804,7 +795,6 @@ td {{
   vertical-align: middle;
 }}
 
-/* ── БЕЙДЖИ ── */
 .badge {{
   display: inline-block;
   padding: 2px 8px;
@@ -822,7 +812,6 @@ td {{
 .badge-net     {{ background: rgba(255,255,255,.05); color: var(--subtext); border: 1px solid var(--border); }}
 .badge-sec     {{ background: rgba(255,255,255,.05); color: var(--subtext); border: 1px solid var(--border); }}
 
-/* ── ПИНГ ── */
 .ping-good {{ color: var(--green); font-weight: 600; }}
 .ping-mid  {{ color: var(--gold); font-weight: 600; }}
 .ping-bad  {{ color: var(--red); font-weight: 600; }}
@@ -830,7 +819,6 @@ td {{
 .loss-ok   {{ color: var(--green); }}
 .loss-bad  {{ color: var(--red); font-weight: 600; }}
 
-/* ── КНОПКА КОПИРОВАНИЯ ── */
 .copy-btn {{
   background: rgba(0,229,255,.08);
   border: 1px solid rgba(0,229,255,.15);
@@ -845,7 +833,6 @@ td {{
 .copy-btn:hover {{ background: rgba(0,229,255,.18); }}
 .copy-btn.copied {{ color: var(--green); border-color: var(--green); }}
 
-/* ── ТОСТ ── */
 #toast {{
   position: fixed;
   bottom: 30px;
@@ -869,7 +856,6 @@ td {{
   transform: translateY(0);
 }}
 
-/* ── ФУТЕР ── */
 footer {{
   margin-top: 60px;
   padding-top: 24px;
@@ -1051,13 +1037,13 @@ def run():
     print(f"\n[4/4] Сохранение...")
 
     if not results:
-        print("❌ Нет рабочих серверов. Старый файл сохранён.")  # FIX: не перезаписываем
+        print("❌ Нет рабочих серверов. Старый файл сохранён.")
         return
 
     results.sort(key=lambda x: x[1])
     top = results[:TOP_N]
 
-    # FIX: разделяем по гео, зарубежные — приоритет
+    # Разделяем по гео
     intl_results = []
     ru_results   = []
     for entry in top:
@@ -1094,19 +1080,57 @@ def run():
         f.write(html)
     print(f"✅ HTML-viewer сохранён в {VIEWER_FILE}")
 
-    # Обновляем Gist
+    # ============================================================
+    # FIX: Обновляем Gist через GitHub REST API (PATCH /gists/{id})
+    # вместо сломанной команды gh gist edit с несколькими файлами
+    # ============================================================
     if GID:
         print("Обновляем Gist (два файла: vps.txt + index.html)...")
-        res = subprocess.run(
-            ["gh", "gist", "edit", GID,
-             "-f", FILE_NAME, FILE_NAME,
-             "-f", VIEWER_FILE, VIEWER_FILE],
+
+        # Читаем содержимое файлов
+        with open(FILE_NAME, "r", encoding="utf-8") as f:
+            vps_content = f.read()
+        with open(VIEWER_FILE, "r", encoding="utf-8") as f:
+            html_content = f.read()
+
+        # Получаем токен через gh CLI
+        token_res = subprocess.run(
+            ["gh", "auth", "token"],
             capture_output=True, text=True
         )
-        if res.returncode == 0:
-            print("✅ Gist обновлён.")
+        token = token_res.stdout.strip()
+
+        if token:
+            import urllib.request as url_req
+
+            payload = json.dumps({
+                "files": {
+                    FILE_NAME:   {"content": vps_content},
+                    VIEWER_FILE: {"content": html_content},
+                }
+            }).encode("utf-8")
+
+            req = url_req.Request(
+                f"https://api.github.com/gists/{GID}",
+                data=payload,
+                method="PATCH",
+                headers={
+                    "Authorization":        f"Bearer {token}",
+                    "Content-Type":         "application/json",
+                    "Accept":               "application/vnd.github+json",
+                    "X-GitHub-Api-Version": "2022-11-28",
+                }
+            )
+            try:
+                with url_req.urlopen(req) as resp:
+                    if resp.status == 200:
+                        print("✅ Gist обновлён.")
+                    else:
+                        print(f"❌ Gist ошибка: статус {resp.status}")
+            except Exception as e:
+                print(f"❌ Gist ошибка: {e}")
         else:
-            print(f"❌ Gist ошибка: {res.stderr.strip()}")
+            print("❌ Не удалось получить токен через gh auth token")
     else:
         print("⚠️  MY_GIST_ID не задан.")
 
