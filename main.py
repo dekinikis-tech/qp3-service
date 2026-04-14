@@ -29,7 +29,11 @@ TEST_URLS = [
     "http://cp.cloudflare.com/",
 ]
 
-SOURCES = [
+# Источники разделены на две группы:
+# RU_SOURCES  — конфиги заточены под Россию (обход белых списков, SNI-RU и т.д.)
+# INT_SOURCES — обычные зарубежные серверы
+
+RU_SOURCES = [
     "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/BLACK_VLESS_RUS.txt",
     "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/BLACK_VLESS_RUS_mobile.txt",
     "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/BLACK_SS+All_RUS.txt",
@@ -37,7 +41,15 @@ SOURCES = [
     "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/WHITE-CIDR-RU-checked.txt",
     "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/WHITE-SNI-RU-all.txt",
     "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/Vless-Reality-White-Lists-Rus-Mobile.txt",
+    "https://raw.githubusercontent.com/kort0881/vpn-vless-configs-russia/main/githubmirror/clean/vless.txt",
 ]
+
+INT_SOURCES = [
+    "https://raw.githubusercontent.com/barry-far/V2ray-config/main/Splitted-By-Protocol/vless.txt",
+    "https://raw.githubusercontent.com/barry-far/V2ray-config/main/Splitted-By-Protocol/trojan.txt",
+]
+
+SOURCES = RU_SOURCES + INT_SOURCES
 
 BLACK_LIST = [
     'meshky', '4mohsen', 'white', '708087',
@@ -451,19 +463,30 @@ def _fetch_with_retry(url: str, retries: int = 3, delay: float = 2.0) -> str | N
     return None
 
 
-def fetch_configs() -> list[str]:
+def fetch_configs() -> tuple[list[str], set[str]]:
+    """Возвращает (список уникальных конфигов, множество конфигов из RU_SOURCES)"""
     all_raw: list[str] = []
-    for url in SOURCES:
-        raw_text = _fetch_with_retry(url)
+    ru_urls: set[str]  = set()   # ключи host:port из RU_SOURCES
+
+    for source_url in SOURCES:
+        is_ru_source = source_url in RU_SOURCES
+        raw_text = _fetch_with_retry(source_url)
         if raw_text is None:
             continue
         text  = _decode_subscription(raw_text)
         found = PROTO_REGEX.findall(text)
-        all_raw.extend(found)
-        fmt = "plain" if text is raw_text else "base64"
-        print(f"  [OK] {url}  →  {len(found)} конфигов  [{fmt}]")
+        fmt   = "plain" if text is raw_text else "base64"
+        tag   = "[RU]" if is_ru_source else "[INT]"
+        print(f"  [OK] {source_url}  →  {len(found)} конфигов  [{fmt}] {tag}")
 
-    # Дедупликация по хосту:порту
+        for cfg in found:
+            all_raw.append(cfg)
+            if is_ru_source:
+                host, port = _extract_host_port(cfg)
+                if host and port:
+                    ru_urls.add(f"{host}:{port}")
+
+    # Дедупликация по хосту:порту (RU побеждает при совпадении)
     seen_endpoints: set[str] = set()
     unique: list[str] = []
     for cfg in all_raw:
@@ -475,7 +498,8 @@ def fetch_configs() -> list[str]:
                 unique.append(cfg)
         else:
             unique.append(cfg)
-    return unique
+
+    return unique, ru_urls
 
 
 # ============================================================
@@ -680,7 +704,7 @@ def run():
 
     # --- [1/4] Сбор ---
     print("\n[1/4] Сбор конфигов...")
-    all_configs = fetch_configs()
+    all_configs, ru_source_keys = fetch_configs()
     print(f"      Итого уникальных (по хосту:порту): {len(all_configs)}")
     if not all_configs:
         print("Нет кандидатов.")
@@ -730,13 +754,13 @@ def run():
     # Сортируем все результаты по score (avg + jitter/2)
     results.sort(key=lambda x: x[1])
 
-    # ── КЛЮЧЕВОЕ: делим ВСЕ результаты по гео,
-    #    каждой категории свой топ TOP_N_EACH ──
+    # Делим по источнику: RU_SOURCES → [RU], INT_SOURCES → без тега
     intl_all = []
     ru_all   = []
     for entry in results:
-        host, _ = _extract_host_port(entry[0])
-        if _is_russian_server(host or ''):
+        host, port = _extract_host_port(entry[0])
+        key = f"{host}:{port}" if host and port else ""
+        if key in ru_source_keys:
             ru_all.append(entry)
         else:
             intl_all.append(entry)
@@ -765,17 +789,15 @@ def run():
             name = urllib.parse.unquote(url.split('#')[-1])[:40] if '#' in url else url[8:48]
             print(f"  {i:<3} {avg:>5}мс  jitter:{jitter:>4}мс  loss:{losses}/{PING_ROUNDS}  {name}")
 
-    # Добавляем префикс [INT] / [RU] к имени сервера (тег после #)
-    def tag_url(url: str, prefix: str) -> str:
+    # Зарубежные — без тега (оригинальное название), RU — с префиксом [RU]
+    def add_ru_tag(url: str) -> str:
         if '#' in url:
             base, tag = url.rsplit('#', 1)
             tag_decoded = urllib.parse.unquote(tag)
-            return f"{base}#{urllib.parse.quote(prefix + ' ' + tag_decoded)}"
-        return f"{url}#{urllib.parse.quote(prefix)}"
+            return f"{base}#{urllib.parse.quote('[RU] ' + tag_decoded)}"
+        return f"{url}#{urllib.parse.quote('[RU]')}"
 
-    tagged_intl = [tag_url(r[0], '[INT]') for r in intl_results]
-    tagged_ru   = [tag_url(r[0], '[RU]')  for r in ru_results]
-    final_urls  = tagged_intl + tagged_ru
+    final_urls = [r[0] for r in intl_results] + [add_ru_tag(r[0]) for r in ru_results]
 
     with open(FILE_NAME, "w", encoding="utf-8") as f:
         f.write("\n".join(final_urls))
