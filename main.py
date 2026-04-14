@@ -30,8 +30,25 @@ TEST_URLS = [
 ]
 
 # Источники разделены на две группы:
+# INT_SOURCES — обычные зарубежные серверы (идут первыми в итоговом файле)
 # RU_SOURCES  — конфиги заточены под Россию (обход белых списков, SNI-RU и т.д.)
-# INT_SOURCES — обычные зарубежные серверы
+
+INT_SOURCES = [
+    "https://raw.githubusercontent.com/yebekhe/TelegramV2rayCollector/main/sub/base64/mix",
+    "https://raw.githubusercontent.com/mahdibland/V2RayAggregator/master/Eternity.txt",
+    "https://raw.githubusercontent.com/mfuu/v2ray/master/v2ray",
+    "https://raw.githubusercontent.com/peasoft/NoMoreWalls/master/list.txt",
+    "https://raw.githubusercontent.com/aiboboxx/v2rayfree/main/v2",
+    "https://raw.githubusercontent.com/soroushmirzaei/telegram-configs-collector/main/splitted/mixed",
+    "https://raw.githubusercontent.com/Surfboardv2ray/TGParse/main/splitted/mixed",
+    "https://raw.githubusercontent.com/Pawdroid/Free-servers/main/sub",
+    "https://raw.githubusercontent.com/barry-far/V2ray-Configs/main/Sub1.txt",
+    "https://raw.githubusercontent.com/barry-far/V2ray-Configs/main/Sub2.txt",
+    "https://raw.githubusercontent.com/barry-far/V2ray-Configs/main/Sub3.txt",
+    "https://raw.githubusercontent.com/liketolivefree/kobabi/main/sub.txt",
+    "https://raw.githubusercontent.com/tbbatbb/Proxy/master/dist/v2ray.config.txt",
+    "https://raw.githubusercontent.com/Everyday-VPN/Everyday-VPN/main/subscription/main.txt",
+]
 
 RU_SOURCES = [
     "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/BLACK_VLESS_RUS.txt",
@@ -465,7 +482,7 @@ def fetch_configs() -> tuple[list[str], set[str]]:
     all_raw: list[str] = []
     ru_urls: set[str]  = set()   # ключи host:port из RU_SOURCES
 
-    for source_url in SOURCES:
+    for source_url in INT_SOURCES + RU_SOURCES:
         is_ru_source = source_url in RU_SOURCES
         raw_text = _fetch_with_retry(source_url)
         if raw_text is None:
@@ -786,15 +803,8 @@ def run():
             name = urllib.parse.unquote(url.split('#')[-1])[:40] if '#' in url else url[8:48]
             print(f"  {i:<3} {avg:>5}мс  jitter:{jitter:>4}мс  loss:{losses}/{PING_ROUNDS}  {name}")
 
-    # Зарубежные — без тега (оригинальное название), RU — с префиксом [RU]
-    def add_ru_tag(url: str) -> str:
-        if '#' in url:
-            base, tag = url.rsplit('#', 1)
-            tag_decoded = urllib.parse.unquote(tag)
-            return f"{base}#{urllib.parse.quote('[RU] ' + tag_decoded)}"
-        return f"{url}#{urllib.parse.quote('[RU]')}"
-
-    final_urls = [r[0] for r in intl_results] + [add_ru_tag(r[0]) for r in ru_results]
+    # Зарубежные первыми, затем российские — без дополнительных тегов
+    final_urls = [r[0] for r in intl_results] + [r[0] for r in ru_results]
 
     with open(FILE_NAME, "w", encoding="utf-8") as f:
         f.write("\n".join(final_urls))
