@@ -6,6 +6,7 @@ import urllib.parse, queue, socket, statistics, base64, urllib.request as url_re
 # ============================================================
 GID         = os.environ.get('MY_GIST_ID')
 FILE_NAME   = "vps.txt"
+SUB_FILE    = "sub.txt"    # Base64-подписка для V2RayNG / Nekobox / Streisand
 VIEWER_FILE = "index.html"
 XRAY_BIN    = "xray"
 TOP_N_EACH  = 50   # топ отдельно для зарубежных И для российских
@@ -15,12 +16,14 @@ TCP_WORKERS    = 100
 TCP_TIMEOUT    = 1.5
 
 # Этап 2 — глубокая проверка через xray
+# Динамические таймауты: если MY_SLOW_NET=1 — увеличиваем пороги для медленных соединений
+_slow = os.environ.get('MY_SLOW_NET') == '1'
 XRAY_WORKERS       = 15
 PING_ROUNDS        = 3
-MAX_PING_MS        = 4000
-MAX_LOSS_RATE      = 0.5
-REQUEST_TIMEOUT    = 7.0
-XRAY_START_TIMEOUT = 3.5
+MAX_PING_MS        = 6000  if _slow else 4000
+MAX_LOSS_RATE      = 0.67  if _slow else 0.5
+REQUEST_TIMEOUT    = 12.0  if _slow else 7.0
+XRAY_START_TIMEOUT = 5.0   if _slow else 3.5
 
 TEST_URLS = [
     "http://www.instagram.com/",
@@ -323,6 +326,29 @@ def _build_xray_config_trojan(url: str, port: int) -> dict | None:
     }
 
 
+def _check_google_ban(session: requests.Session) -> bool:
+    """
+    Проверяет, не забанен ли прокси Google-ом.
+    generate_204 должен вернуть 204. Редирект на sorry.google.com = капча/бан.
+    Возвращает True если всё нормально (не забанен).
+    """
+    try:
+        r = session.get(
+            "http://www.google.com/generate_204",
+            timeout=5.0,
+            allow_redirects=False,
+        )
+        if r.status_code == 204:
+            return True
+        if r.status_code in (301, 302):
+            location = r.headers.get('Location', '')
+            if 'sorry' in location or 'captcha' in location:
+                return False
+        return True
+    except Exception:
+        return True  # не смогли проверить — не штрафуем
+
+
 def test_via_xray(url: str):
     port     = port_queue.get()
     cfg_file = f"cfg_{port}.json"
@@ -360,6 +386,10 @@ def test_via_xray(url: str):
         session           = requests.Session()
         session.trust_env = False
         session.proxies   = proxies
+
+        # --- Проверка на Google-бан ---
+        if not _check_google_ban(session):
+            return None
 
         pings  = []
         losses = 0
@@ -691,6 +721,9 @@ def run():
     print(f"  Xray-воркеры  : {XRAY_WORKERS}  (таймаут {XRAY_START_TIMEOUT}с)")
     print(f"  Раундов       : {PING_ROUNDS},  макс. пинг: {MAX_PING_MS}мс")
     print(f"  Топ каждой гео: {TOP_N_EACH}")
+    print(f"  Динамический таймаут (MY_SLOW_NET): {'ВКЛ' if _slow else 'ВЫКЛ'}")
+    print(f"  Google-бан фильтр: ВКЛ")
+    print(f"  Base64-подписка: {SUB_FILE}")
     print("=" * 60)
 
     # --- [1/4] Сбор ---
@@ -787,6 +820,12 @@ def run():
         f.write("\n".join(final_urls))
     print(f"\n✅ Сохранено {len(final_urls)} серверов в {FILE_NAME}")
 
+    # Генерируем Base64-подписку (для V2RayNG / Nekobox / Streisand)
+    b64_content = base64.b64encode("\n".join(final_urls).encode("utf-8")).decode("utf-8")
+    with open(SUB_FILE, "w", encoding="utf-8") as f:
+        f.write(b64_content)
+    print(f"✅ Base64-подписка сохранена в {SUB_FILE}")
+
     # Генерируем HTML
     html = generate_html_viewer(intl_results, ru_results, elapsed_total)
     with open(VIEWER_FILE, "w", encoding="utf-8") as f:
@@ -795,10 +834,12 @@ def run():
 
     # Обновляем Gist через GitHub REST API
     if GID:
-        print("Обновляем Gist (два файла: vps.txt + index.html)...")
+        print("Обновляем Gist (три файла: vps.txt + sub.txt + index.html)...")
 
         with open(FILE_NAME, "r", encoding="utf-8") as f:
             vps_content = f.read()
+        with open(SUB_FILE, "r", encoding="utf-8") as f:
+            sub_content = f.read()
         with open(VIEWER_FILE, "r", encoding="utf-8") as f:
             html_content = f.read()
 
@@ -817,6 +858,7 @@ def run():
             payload = json.dumps({
                 "files": {
                     FILE_NAME:   {"content": vps_content},
+                    SUB_FILE:    {"content": sub_content},
                     VIEWER_FILE: {"content": html_content},
                 }
             }).encode("utf-8")
