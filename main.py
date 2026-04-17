@@ -32,9 +32,6 @@ TEST_URLS = [
     "http://cp.cloudflare.com/",
 ]
 
-# Единый список источников — все твои ссылки.
-# Разделение на «зарубежные» и «российские» делается по IP/домену самого сервера
-# внутри конфига (функция _is_russian_server), а не по источнику.
 SOURCES = [
     "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/BLACK_VLESS_RUS.txt",
     "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/BLACK_VLESS_RUS_mobile.txt",
@@ -137,6 +134,48 @@ def _is_russian_server(address: str) -> bool:
 
 
 # ============================================================
+# БЕЗОПАСНОСТЬ СЕРВЕРА
+# ============================================================
+
+def _get_proto(url: str) -> str:
+    for p in ('vless', 'trojan', 'hysteria2', 'ss'):
+        if url.startswith(p + '://'):
+            return p.upper()
+    return 'UNKNOWN'
+
+
+def _get_security(url: str) -> str:
+    m = re.search(r'[?&]security=([^&#+]+)', url)
+    if m:
+        return m.group(1)
+    if 'trojan://' in url:
+        return 'tls'
+    return 'none'
+
+
+def _get_network(url: str) -> str:
+    m = re.search(r'[?&]type=([^&#+]+)', url)
+    return m.group(1) if m else 'tcp'
+
+
+def _get_security_level(url: str) -> tuple:
+    """
+    Возвращает (уровень, иконка, описание):
+      'reality'  -> 🔑  Reality/XTLS — максимальная защита
+      'secure'   -> 🔒  TLS без allowInsecure
+      'insecure' -> ⚠️   allowInsecure=1 или security=none
+    """
+    sec = _get_security(url)
+    allow_insecure = bool(re.search(r'[?&]allowInsecure=1', url))
+
+    if sec == 'reality':
+        return 'reality', '\U0001f511', 'Reality/XTLS — максимальная защита'
+    if sec == 'tls' and not allow_insecure:
+        return 'secure', '\U0001f512', 'TLS — соединение защищено'
+    return 'insecure', '\u26a0\ufe0f', 'Небезопасно: нет TLS или allowInsecure=1'
+
+
+# ============================================================
 # ЭТАП 1: БЫСТРАЯ TCP-ПРОВЕРКА
 # ============================================================
 
@@ -156,15 +195,15 @@ def _extract_host_port(url: str):
     return None, None
 
 
-def tcp_alive(url: str) -> str | None:
+def tcp_alive(url: str):
     address, port = _extract_host_port(url)
     if address is None:
         return None
-        
-    # ИСПРАВЛЕНИЕ: Отсекаем мусорные данные, чтобы избежать UnicodeError(label too long)
+
+    # Отсекаем мусорные данные, чтобы избежать UnicodeError(label too long)
     if len(address) > 253:
         return None
-        
+
     if _is_ipv6_address(address):
         return None
     if address.startswith(BLOCKED_IPS):
@@ -175,7 +214,7 @@ def tcp_alive(url: str) -> str | None:
     try:
         with socket.create_connection((address, port), timeout=TCP_TIMEOUT):
             return url
-    # ИСПРАВЛЕНИЕ: Ловим UnicodeError и ValueError, чтобы скрипт не падал из-за битых доменов
+    # Ловим UnicodeError и ValueError, чтобы скрипт не падал из-за битых доменов
     except (OSError, UnicodeError, ValueError):
         return None
 
@@ -261,7 +300,7 @@ def _build_xray_config(data: dict, port: int) -> dict:
     }
 
 
-def _build_xray_config_trojan(url: str, port: int) -> dict | None:
+def _build_xray_config_trojan(url: str, port: int):
     m = re.match(
         r'trojan://([^@]+)@([^:/?#\[\]]+|\[[^\]]+\]):(\d+)\??([^#]*)?#?(.*)?', url
     )
@@ -473,7 +512,7 @@ def _decode_subscription(text: str) -> str:
     return '\n'.join(lines_decoded) if lines_decoded else stripped
 
 
-def _fetch_with_retry(url: str, retries: int = 3, delay: float = 2.0) -> str | None:
+def _fetch_with_retry(url: str, retries: int = 3, delay: float = 2.0):
     headers = {'User-Agent': 'Mozilla/5.0'}
     for attempt in range(1, retries + 1):
         try:
@@ -489,11 +528,10 @@ def _fetch_with_retry(url: str, retries: int = 3, delay: float = 2.0) -> str | N
     return None
 
 
-def fetch_configs() -> tuple[list[str], set[str]]:
-    """Возвращает (список уникальных конфигов, множество host:port российских серверов).
-    Разделение RU/INT — по IP/домену самого сервера (_is_russian_server), не по источнику."""
-    all_raw: list[str] = []
-    ru_keys: set[str]  = set()
+def fetch_configs():
+    """Возвращает (список уникальных конфигов, множество host:port российских серверов)."""
+    all_raw = []
+    ru_keys = set()
 
     for source_url in SOURCES:
         raw_text = _fetch_with_retry(source_url)
@@ -502,12 +540,12 @@ def fetch_configs() -> tuple[list[str], set[str]]:
         text  = _decode_subscription(raw_text)
         found = PROTO_REGEX.findall(text)
         fmt   = "plain" if text is raw_text else "base64"
-        print(f"  [OK] {source_url}  →  {len(found)} конфигов  [{fmt}]")
+        print(f"  [OK] {source_url}  ->  {len(found)} конфигов  [{fmt}]")
         all_raw.extend(found)
 
     # Дедупликация по хосту:порту
-    seen_endpoints: set[str] = set()
-    unique: list[str] = []
+    seen_endpoints = set()
+    unique = []
     for cfg in all_raw:
         host, port = _extract_host_port(cfg)
         if host and port:
@@ -526,27 +564,6 @@ def fetch_configs() -> tuple[list[str], set[str]]:
 # ============================================================
 # ГЕНЕРАЦИЯ HTML
 # ============================================================
-
-def _get_proto(url: str) -> str:
-    for p in ('vless', 'trojan', 'hysteria2', 'ss'):
-        if url.startswith(p + '://'):
-            return p.upper()
-    return 'UNKNOWN'
-
-
-def _get_security(url: str) -> str:
-    m = re.search(r'[?&]security=([^&#+]+)', url)
-    if m:
-        return m.group(1)
-    if 'trojan://' in url:
-        return 'tls'
-    return 'none'
-
-
-def _get_network(url: str) -> str:
-    m = re.search(r'[?&]type=([^&#+]+)', url)
-    return m.group(1) if m else 'tcp'
-
 
 def generate_html_viewer(intl_results: list, ru_results: list, elapsed: int) -> str:
 
@@ -569,13 +586,26 @@ def generate_html_viewer(intl_results: list, ru_results: list, elapsed: int) -> 
             pc       = ping_color(avg)
             safe_url = url.replace('&', '&amp;').replace('"', '&quot;').replace('<', '&lt;').replace("'", '&#39;')
             safe_tag = tag.replace('<', '&lt;').replace('>', '&gt;')
+
+            # Определяем уровень безопасности
+            sec_level, sec_icon, sec_tooltip = _get_security_level(url)
+            if sec_level == 'reality':
+                sec_color = '#a78bfa'
+            elif sec_level == 'secure':
+                sec_color = '#06d6a0'
+            else:
+                sec_color = '#ef476f'
+
             rows.append(
                 f'<tr style="border-bottom:1px solid #1e2230">'
                 f'<td style="padding:9px 10px;color:#4a5568;width:36px">{i}</td>'
-                f'<td style="padding:9px 10px;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{flag} {safe_tag}</td>'
+                f'<td style="padding:9px 10px;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{flag} {safe_tag}</td>'
                 f'<td style="padding:9px 10px"><span style="background:#0d2b33;color:#00e5ff;border:1px solid #005f6b;border-radius:4px;padding:2px 7px;font-size:11px;font-weight:700">{proto}</span></td>'
                 f'<td style="padding:9px 10px"><span style="background:#1a1f2e;color:#9aa0b4;border:1px solid #2a3040;border-radius:4px;padding:2px 7px;font-size:11px">{network}</span></td>'
                 f'<td style="padding:9px 10px"><span style="background:#1a1f2e;color:#9aa0b4;border:1px solid #2a3040;border-radius:4px;padding:2px 7px;font-size:11px">{security}</span></td>'
+                f'<td style="padding:9px 10px;text-align:center">'
+                f'<span title="{sec_tooltip}" style="font-size:15px;cursor:help;color:{sec_color}">{sec_icon}</span>'
+                f'</td>'
                 f'<td style="padding:9px 10px;color:{pc};font-weight:700">{avg}ms</td>'
                 f'<td style="padding:9px 10px;color:#718096">{jitter}ms</td>'
                 f'<td style="padding:9px 10px;color:{"#06d6a0" if loss_pct==0 else "#ef476f"}">{loss_pct}%</td>'
@@ -601,6 +631,8 @@ body {{ margin:0; padding:0; background:#0a0c10; color:#e2e8f0; font-family:Aria
 h1 {{ margin:0; padding:20px 20px 0; font-size:24px; color:#fff; }}
 .info {{ padding:8px 20px 16px; color:#718096; font-size:12px; }}
 .info b {{ color:#00e5ff; }}
+.legend {{ padding:0 20px 10px; font-size:11px; color:#718096; display:flex; gap:16px; flex-wrap:wrap; }}
+.legend span {{ display:flex; align-items:center; gap:4px; }}
 .stats-row {{ display:table; width:100%; border-collapse:separate; border-spacing:10px; padding:0 10px 10px; box-sizing:border-box; }}
 .stat {{ display:table-cell; background:#111318; border:1px solid #1e2230; border-radius:8px; padding:14px 18px; text-align:center; }}
 .stat-num {{ font-size:26px; font-weight:700; color:#fff; }}
@@ -637,6 +669,12 @@ tbody tr:hover {{ background:#161b26; }}
 <h1>VPN Scout</h1>
 <div class="info">Обновлено: <b>{updated}</b> &nbsp;|&nbsp; Время проверки: <b>{elapsed}с</b></div>
 
+<div class="legend">
+  <span><span style="color:#a78bfa;font-size:14px">🔑</span> Reality/XTLS — максимальная защита</span>
+  <span><span style="color:#06d6a0;font-size:14px">🔒</span> TLS — соединение защищено</span>
+  <span><span style="color:#ef476f;font-size:14px">⚠️</span> Небезопасно (нет TLS или allowInsecure=1)</span>
+</div>
+
 <div class="stats-row">
   <div class="stat"><div class="stat-num" style="color:#00e5ff">{len(intl_results)}</div><div class="stat-lbl">🌍 Зарубежных</div></div>
   <div class="stat"><div class="stat-num" style="color:#ff6b35">{len(ru_results)}</div><div class="stat-lbl">🇷🇺 Российских</div></div>
@@ -652,9 +690,9 @@ tbody tr:hover {{ background:#161b26; }}
 <div class="section visible" id="sec-intl">
   <div class="tbl-wrap">
     <table>
-      <thead><tr><th>#</th><th>Сервер</th><th>Протокол</th><th>Транспорт</th><th>Безопасность</th><th>Пинг</th><th>Jitter</th><th>Loss</th><th></th></tr></thead>
+      <thead><tr><th>#</th><th>Сервер</th><th>Протокол</th><th>Транспорт</th><th>Безопасность</th><th>🔒</th><th>Пинг</th><th>Jitter</th><th>Loss</th><th></th></tr></thead>
       <tbody>
-        {intl_rows if intl_rows else '<tr><td colspan="9" style="text-align:center;padding:30px;color:#718096">Нет серверов</td></tr>'}
+        {intl_rows if intl_rows else '<tr><td colspan="10" style="text-align:center;padding:30px;color:#718096">Нет серверов</td></tr>'}
       </tbody>
     </table>
   </div>
@@ -663,9 +701,9 @@ tbody tr:hover {{ background:#161b26; }}
 <div class="section" id="sec-ru">
   <div class="tbl-wrap">
     <table>
-      <thead><tr><th>#</th><th>Сервер</th><th>Протокол</th><th>Транспорт</th><th>Безопасность</th><th>Пинг</th><th>Jitter</th><th>Loss</th><th></th></tr></thead>
+      <thead><tr><th>#</th><th>Сервер</th><th>Протокол</th><th>Транспорт</th><th>Безопасность</th><th>🔒</th><th>Пинг</th><th>Jitter</th><th>Loss</th><th></th></tr></thead>
       <tbody>
-        {ru_rows if ru_rows else '<tr><td colspan="9" style="text-align:center;padding:30px;color:#718096">Нет серверов</td></tr>'}
+        {ru_rows if ru_rows else '<tr><td colspan="10" style="text-align:center;padding:30px;color:#718096">Нет серверов</td></tr>'}
       </tbody>
     </table>
   </div>
@@ -772,13 +810,13 @@ def run():
     # --- [4/4] Сохранение ---
     print(f"\n[4/4] Сохранение...")
     if not results:
-        print("❌ Нет рабочих серверов. Старый файл сохранён.")
+        print("Нет рабочих серверов. Старый файл сохранён.")
         return
 
     # Сортируем все результаты по score (avg + jitter/2)
     results.sort(key=lambda x: x[1])
 
-    # Делим по адресу сервера: российские (_is_russian_server) → вниз, остальные → вверх
+    # Делим по адресу сервера
     intl_all = []
     ru_all   = []
     for entry in results:
@@ -792,45 +830,54 @@ def run():
     intl_results = intl_all[:TOP_N_EACH]
     ru_results   = ru_all[:TOP_N_EACH]
 
-    # Зарубежные первыми в итоговом файле
-    ordered = intl_results + ru_results
-
     print(f"\n{'─'*60}")
-    print(f"  Всего: {len(all_configs)} → TCP: {len(alive)} → xray: {len(results)}")
-    print(f"  🌍 Зарубежных: найдено {len(intl_all)}, в топе: {len(intl_results)}")
-    print(f"  🇷🇺 Российских: найдено {len(ru_all)}, в топе: {len(ru_results)}")
+    print(f"  Всего: {len(all_configs)} -> TCP: {len(alive)} -> xray: {len(results)}")
+    print(f"  Зарубежных: найдено {len(intl_all)}, в топе: {len(intl_results)}")
+    print(f"  Российских: найдено {len(ru_all)}, в топе: {len(ru_results)}")
     print(f"  Время: {elapsed_total}с")
     print(f"{'─'*60}")
 
     print("\n  Топ-10 зарубежных:")
     for i, (url, score, avg, jitter, losses) in enumerate(intl_results[:10], 1):
+        _, sec_icon, _ = _get_security_level(url)
         name = urllib.parse.unquote(url.split('#')[-1])[:40] if '#' in url else url[8:48]
-        print(f"  {i:<3} {avg:>5}мс  jitter:{jitter:>4}мс  loss:{losses}/{PING_ROUNDS}  {name}")
+        print(f"  {i:<3} {avg:>5}мс  jitter:{jitter:>4}мс  loss:{losses}/{PING_ROUNDS}  {sec_icon} {name}")
 
     if ru_results:
         print("\n  Топ-10 российских:")
         for i, (url, score, avg, jitter, losses) in enumerate(ru_results[:10], 1):
+            _, sec_icon, _ = _get_security_level(url)
             name = urllib.parse.unquote(url.split('#')[-1])[:40] if '#' in url else url[8:48]
-            print(f"  {i:<3} {avg:>5}мс  jitter:{jitter:>4}мс  loss:{losses}/{PING_ROUNDS}  {name}")
+            print(f"  {i:<3} {avg:>5}мс  jitter:{jitter:>4}мс  loss:{losses}/{PING_ROUNDS}  {sec_icon} {name}")
 
-    # Зарубежные первыми, затем российские — без дополнительных тегов
-    final_urls = [r[0] for r in intl_results] + [r[0] for r in ru_results]
+    # Формируем URL-ы с иконкой безопасности в теге (#...)
+    tagged_urls = []
+    for r in intl_results + ru_results:
+        url = r[0]
+        _, sec_icon, _ = _get_security_level(url)
+        if '#' in url:
+            base, tag = url.rsplit('#', 1)
+            clean_tag = urllib.parse.unquote(tag)[:38]
+            tagged_urls.append(f"{base}#{sec_icon} {clean_tag}")
+        else:
+            host, port = _extract_host_port(url)
+            tagged_urls.append(f"{url}#{sec_icon} {host}:{port}")
 
     with open(FILE_NAME, "w", encoding="utf-8") as f:
-        f.write("\n".join(final_urls))
-    print(f"\n✅ Сохранено {len(final_urls)} серверов в {FILE_NAME}")
+        f.write("\n".join(tagged_urls))
+    print(f"\n Сохранено {len(tagged_urls)} серверов в {FILE_NAME}")
 
     # Генерируем Base64-подписку (для V2RayNG / Nekobox / Streisand)
-    b64_content = base64.b64encode("\n".join(final_urls).encode("utf-8")).decode("utf-8")
+    b64_content = base64.b64encode("\n".join(tagged_urls).encode("utf-8")).decode("utf-8")
     with open(SUB_FILE, "w", encoding="utf-8") as f:
         f.write(b64_content)
-    print(f"✅ Base64-подписка сохранена в {SUB_FILE}")
+    print(f" Base64-подписка сохранена в {SUB_FILE}")
 
     # Генерируем HTML
     html = generate_html_viewer(intl_results, ru_results, elapsed_total)
     with open(VIEWER_FILE, "w", encoding="utf-8") as f:
         f.write(html)
-    print(f"✅ HTML-viewer сохранён в {VIEWER_FILE}")
+    print(f" HTML-viewer сохранён в {VIEWER_FILE}")
 
     # Обновляем Gist через GitHub REST API
     if GID:
@@ -843,7 +890,7 @@ def run():
         with open(VIEWER_FILE, "r", encoding="utf-8") as f:
             html_content = f.read()
 
-        # ИСПРАВЛЕНИЕ: Читаем токен сразу из окружения, чтобы избежать сбоев gh в Actions
+        # Читаем токен из окружения
         token = os.environ.get('GH_TOKEN')
         if not token:
             try:
@@ -877,15 +924,15 @@ def run():
             try:
                 with url_req.urlopen(req) as resp:
                     if resp.status == 200:
-                        print("✅ Gist обновлён.")
+                        print(" Gist обновлён.")
                     else:
-                        print(f"❌ Gist ошибка: статус {resp.status}")
+                        print(f" Gist ошибка: статус {resp.status}")
             except Exception as e:
-                print(f"❌ Gist ошибка: {e}")
+                print(f" Gist ошибка: {e}")
         else:
-            print("❌ Не удалось получить токен GitHub (GH_TOKEN)!")
+            print(" Не удалось получить токен GitHub (GH_TOKEN)!")
     else:
-        print("⚠️  MY_GIST_ID не задан.")
+        print("  MY_GIST_ID не задан.")
 
 
 if __name__ == "__main__":
