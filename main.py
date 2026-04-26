@@ -11,12 +11,15 @@ VIEWER_FILE = "index.html"
 XRAY_BIN    = "xray"
 TOP_N_EACH  = 1000   # топ отдельно для зарубежных И для российских
 
-on  = True
-off = False
+# ============================================================
+# ФИЛЬТРЫ СЕРВЕРОВ
+# ============================================================
+on  = True   # псевдоним для удобства
+off = False  # псевдоним для удобства
 
-FILTER_INSECURE  = on    # on = скрыть серверы с ⚠️  (нет TLS / allowInsecure=1)
-FILTER_TLS_LOCK  = off   # on = скрыть серверы с 🔒  (обычный TLS, только Reality 🔑)
-FILTER_RUSSIAN   = on    # on = скрыть серверы с 🇷🇺  (российские IP/домены)
+FILTER_INSECURE = on    # on = скрыть ⚠️  небезопасные (нет TLS / allowInsecure=1)
+FILTER_LOCK     = off   # on = скрыть 🔒  обычный TLS  (оставить только Reality 🔑)
+FILTER_RUSSIAN  = on    # on = скрыть 🇷🇺  российские  (IP + домен + тег + SNI)
 
 # Этап 1 — быстрый TCP-пинг
 TCP_WORKERS    = 100
@@ -99,6 +102,12 @@ RU_IP_PREFIXES = (
     '213.195.', '213.202.', '213.203.', '213.206.', '213.207.', '213.208.', '213.219.',
     '213.220.', '213.222.', '213.226.', '213.227.', '213.228.', '213.230.', '213.232.',
     '213.234.', '213.243.', '213.248.', '216.24.',
+    '5.178.',    '5.188.',    '5.189.',
+    '80.93.',    '80.249.',
+    '82.202.',   '82.203.',
+    '91.206.',   '91.207.',
+    '103.213.',
+    '217.16.',   '217.17.',
     '158.160.',  # Yandex Cloud
     '51.250.',   # Yandex Cloud
     '84.201.',   # Yandex Cloud
@@ -130,13 +139,59 @@ for _p in range(25000, 25000 + XRAY_WORKERS):
 # ГЕОЛОКАЦИЯ
 # ============================================================
 
-def _is_russian_server(address: str) -> bool:
+# Ключевые слова которые встречаются в тегах (#...) российских серверов
+RU_TAG_KEYWORDS = (
+    'russia', 'russian', 'россия', 'рф', '\U0001f1f7\U0001f1fa',
+    '%f0%9f%87%b7%f0%9f%87%ba',  # 🇷🇺 в URL-encode
+)
+
+# Российские SNI-домены которые используются как маскировка
+RU_SNI_KEYWORDS = (
+    'ozone.ru', 'vk.com', 'vk-apps', 'x5.ru', 'max.ru',
+    'firstvideocdn.ru', 'eh.vk', 'mail.ru', 'yandex.',
+    'sber.', 'gosuslugi.', 'mos.ru', 'rmp-inc',
+)
+
+
+def _is_russian_server(address: str, url: str = '') -> bool:
+    """
+    Проверяет является ли сервер российским.
+    Три уровня проверки:
+      1. IP-адрес — входит ли в RU_IP_PREFIXES
+      2. Домен/адрес — содержит ли RU_DOMAIN_KEYWORDS
+      3. Тег (#...) и SNI — содержит ли упоминание России
+    """
     addr_lower = address.lower()
-    if any(kw in addr_lower for kw in RU_DOMAIN_KEYWORDS):
-        return True
+
+    # 1. Проверка IP-префикса
     if address and address[0].isdigit():
         if address.startswith(RU_IP_PREFIXES):
             return True
+
+    # 2. Проверка домена/адреса сервера
+    if any(kw in addr_lower for kw in RU_DOMAIN_KEYWORDS):
+        return True
+
+    # 3. Проверка тега и SNI в полном URL
+    if url:
+        url_lower = url.lower()
+
+        # Тег после #
+        if '#' in url:
+            tag_raw = url.split('#', 1)[1].lower()
+            tag_decoded = urllib.parse.unquote(tag_raw).lower()
+            if any(kw in tag_raw for kw in RU_TAG_KEYWORDS):
+                return True
+            if any(kw in tag_decoded for kw in RU_TAG_KEYWORDS):
+                return True
+
+        # SNI-домен в параметрах
+        sni_match = re.search(r'[?&]sni=([^&#+]+)', url_lower)
+        if sni_match:
+            sni = urllib.parse.unquote(sni_match.group(1))
+            if any(kw in sni for kw in RU_SNI_KEYWORDS):
+                return True
+
     return False
 
 
@@ -560,7 +615,7 @@ def fetch_configs():
             if key not in seen_endpoints:
                 seen_endpoints.add(key)
                 unique.append(cfg)
-                if _is_russian_server(host):
+                if _is_russian_server(host, cfg):
                     ru_keys.add(key)
         else:
             unique.append(cfg)
@@ -587,7 +642,7 @@ def generate_html_viewer(intl_results: list, ru_results: list, elapsed: int) -> 
             network  = _get_network(url)
             host, _  = _extract_host_port(url)
             tag      = urllib.parse.unquote(url.split('#')[-1])[:40] if '#' in url else (host or '')[:40]
-            is_ru    = _is_russian_server(host or '')
+            is_ru    = _is_russian_server(host or '', url)
             flag     = '\U0001f1f7\U0001f1fa' if is_ru else '\U0001f30d'
             loss_pct = int(losses / PING_ROUNDS * 100)
             pc       = ping_color(avg)
@@ -768,10 +823,10 @@ def run():
     print(f"  Топ каждой гео: {TOP_N_EACH}")
     print(f"  Динамический таймаут (MY_SLOW_NET): {'ВКЛ' if _slow else 'ВЫКЛ'}")
     print(f"  Google-бан фильтр: ВКЛ")
-    print(f"  Фильтр ⚠️  небезопасных (FILTER_INSECURE): {'ВКЛ' if FILTER_INSECURE else 'ВЫКЛ'}")
-    print(f"  Фильтр 🔒 TLS-серверов (FILTER_TLS_LOCK): {'ВКЛ' if FILTER_TLS_LOCK else 'ВЫКЛ'}")
-    print(f"  Фильтр 🇷🇺 русских серверов (FILTER_RUSSIAN): {'ВКЛ' if FILTER_RUSSIAN else 'ВЫКЛ'}")
     print(f"  Base64-подписка: {SUB_FILE}")
+    print(f"  Фильтр ⚠️  небезопасные  : {'ВКЛ' if FILTER_INSECURE else 'ВЫКЛ'}")
+    print(f"  Фильтр 🔒  TLS-only      : {'ВКЛ' if FILTER_LOCK     else 'ВЫКЛ'}")
+    print(f"  Фильтр 🇷🇺  российские   : {'ВКЛ' if FILTER_RUSSIAN  else 'ВЫКЛ'}")
     print("=" * 60)
 
     # --- [1/4] Сбор ---
@@ -826,29 +881,29 @@ def run():
     # Сортируем все результаты по score (avg + jitter/2)
     results.sort(key=lambda x: x[1])
 
-    # ---- Применяем фильтры ----
-    filtered_out = 0
-    filtered = []
-    for entry in results:
-        url = entry[0]
-        sec_level, _, _ = _get_security_level(url)
-        host, port = _extract_host_port(url)
-        is_ru = _is_russian_server(host or '')
+    # --- Применяем фильтры ---
+    if FILTER_INSECURE or FILTER_LOCK or FILTER_RUSSIAN:
+        before = len(results)
+        filtered = []
+        for entry in results:
+            url  = entry[0]
+            host, port = _extract_host_port(url)
+            sec_level, _, _ = _get_security_level(url)
+            is_ru = _is_russian_server(host or '', url)
 
-        if FILTER_INSECURE and sec_level == 'insecure':
-            filtered_out += 1
-            continue
-        if FILTER_TLS_LOCK and sec_level == 'secure':
-            filtered_out += 1
-            continue
-        if FILTER_RUSSIAN and is_ru:
-            filtered_out += 1
-            continue
-        filtered.append(entry)
-
-    if filtered_out:
-        print(f"\n  Отфильтровано настройками (⚠️/🔒/🇷🇺): {filtered_out} серверов")
-    results = filtered
+            if FILTER_INSECURE and sec_level == 'insecure':
+                continue
+            if FILTER_LOCK and sec_level == 'secure':
+                continue
+            if FILTER_RUSSIAN and is_ru:
+                continue
+            filtered.append(entry)
+        results = filtered
+        print(f"  Фильтры убрали: {before - len(results)} серверов  (осталось {len(results)})")
+        print(f"  Активные фильтры: "
+              f"{'⚠️ небезопасные ' if FILTER_INSECURE else ''}"
+              f"{'🔒 TLS-only ' if FILTER_LOCK else ''}"
+              f"{'🇷🇺 российские ' if FILTER_RUSSIAN else ''}")
 
     # Делим по адресу сервера
     intl_all = []
