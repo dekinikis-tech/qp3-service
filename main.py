@@ -18,7 +18,7 @@ on  = True   # псевдоним для удобства
 off = False  # псевдоним для удобства
 
 FILTER_INSECURE    = on    # on = скрыть ⚠️  небезопасные (нет TLS / allowInsecure=1)
-FILTER_LOCK        = on    # on = скрыть 🔒  обычный TLS  (оставить только Reality 🔑)
+FILTER_LOCK        = щт   # on = скрыть 🔒  обычный TLS  (оставить только Reality 🔑)
 FILTER_RUSSIAN     = on    # on = скрыть 🇷🇺  российские  (IP + домен + тег + SNI)
 FILTER_INVALID_PBK = on    # on = скрыть серверы с невалидным pbk ключом Reality
 FILTER_DEAD_SNI    = on    # on = скрыть серверы у которых SNI-сайт не отвечает
@@ -33,8 +33,8 @@ SNI_CHECK_TIMEOUT  = 4.0
 # Российские серверы используются ТОЛЬКО внутри скрипта как инструмент.
 # В финальный список они НЕ попадают (управляется FILTER_RUSSIAN отдельно).
 
-CHAIN_PROXY = on    # on = проверять зарубежные через российские серверы
-CHAIN_TOP_N = 3     # сколько лучших российских брать в цепочку
+CHAIN_PROXY = on   # on = проверять зарубежные через российские серверы
+CHAIN_TOP_N = 10     # сколько лучших российских брать в цепочку
 
 # Этап 1 — быстрый TCP-пинг
 TCP_WORKERS    = 100
@@ -1042,9 +1042,11 @@ def run():
     results.sort(key=lambda x: x[1])
 
     # --- Цепочка через российские серверы ---
+    # ВАЖНО: цепочка работает ДО фильтров — российские серверы нужны как инструмент,
+    # но в финальный список они не попадут — их уберёт FILTER_RUSSIAN ниже.
     if CHAIN_PROXY:
-        # Выделяем российские серверы из результатов xray
-        ru_for_chain = []
+        # Выделяем российские серверы из ВСЕХ результатов xray (до любых фильтров)
+        ru_for_chain   = []
         intl_for_chain = []
         for entry in results:
             h, _ = _extract_host_port(entry[0])
@@ -1054,12 +1056,12 @@ def run():
                 intl_for_chain.append(entry)
 
         if ru_for_chain:
-            print(f"\n[ЦЕПОЧКА] Найдено российских серверов: {len(ru_for_chain)}")
+            print(f"\n[ЦЕПОЧКА] Найдено российских серверов для цепочки: {len(ru_for_chain)}")
             print(f"  Запускаем топ-{CHAIN_TOP_N} как прокси...")
             started = _start_chain_proxies(ru_for_chain)
 
             if started:
-                print(f"  Перепроверяем {len(intl_for_chain)} зарубежных через цепочку...")
+                print(f"  Перепроверяем {len(intl_for_chain)} зарубежных через российскую цепочку...")
                 chain_results = []
                 with concurrent.futures.ThreadPoolExecutor(max_workers=XRAY_WORKERS) as ex:
                     futures = {ex.submit(_test_via_chain, e[0]): e for e in intl_for_chain}
@@ -1073,19 +1075,20 @@ def run():
                             print(f"  Прогресс цепочки: {done}/{len(intl_for_chain)}")
 
                 _stop_chain_proxies()
-                print(f"  Через цепочку прошли: {len(chain_results)} серверов")
+                print(f"  Через цепочку прошли: {len(chain_results)} зарубежных серверов")
 
-                # Заменяем зарубежные результаты на проверенные через цепочку
-                # Российские добавляем обратно (они нужны для дальнейшей фильтрации)
+                # Зарубежные заменяем на проверенные через цепочку.
+                # Российские тоже возвращаем — чтобы FILTER_RUSSIAN их убрал ниже.
                 results = chain_results + ru_for_chain
                 results.sort(key=lambda x: x[1])
             else:
                 print("  Не удалось запустить ни один российский сервер в цепочку.")
-                print("  Используем обычные результаты.")
+                print("  Используем обычные результаты без цепочки.")
         else:
-            print("[ЦЕПОЧКА] Российских серверов не найдено — пропускаем.")
+            print("[ЦЕПОЧКА] Российских серверов не найдено — пропускаем цепочку.")
 
-    # --- Применяем фильтры ---
+    # --- Применяем фильтры (ПОСЛЕ цепочки) ---
+    # Российские серверы убираются здесь — они уже сделали своё дело в цепочке.
     any_filter = (FILTER_INSECURE or FILTER_LOCK or FILTER_RUSSIAN
                   or FILTER_INVALID_PBK or FILTER_DEAD_SNI)
     if any_filter:
@@ -1110,7 +1113,7 @@ def run():
                 cnt_insecure += 1; continue
             if FILTER_LOCK and sec_level == 'secure':
                 cnt_lock += 1; continue
-            if FILTER_RUSSIAN and is_ru:
+            if FILTER_RUSSIAN and is_ru:          # ← российские убираются ЗДЕСЬ
                 cnt_ru += 1; continue
             if FILTER_INVALID_PBK and not _check_pbk(url):
                 cnt_pbk += 1; continue
@@ -1122,7 +1125,7 @@ def run():
         print(f"  Фильтры убрали: {before - len(results)} серверов  (осталось {len(results)})")
         if cnt_insecure: print(f"    ⚠️  небезопасных убрано : {cnt_insecure}")
         if cnt_lock:     print(f"    🔒 TLS-only убрано     : {cnt_lock}")
-        if cnt_ru:       print(f"    🇷🇺 российских убрано  : {cnt_ru}")
+        if cnt_ru:       print(f"    🇷🇺 российских убрано  : {cnt_ru}  (использовались в цепочке)" if CHAIN_PROXY else f"    🇷🇺 российских убрано  : {cnt_ru}")
         if cnt_pbk:      print(f"    🔑 невалидный pbk      : {cnt_pbk}")
         if cnt_sni:      print(f"    🌐 мёртвый SNI-сайт    : {cnt_sni}")
 
