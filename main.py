@@ -21,10 +21,20 @@ FILTER_INSECURE    = on    # on = скрыть ⚠️  небезопасные 
 FILTER_LOCK        = on    # on = скрыть 🔒  обычный TLS  (оставить только Reality 🔑)
 FILTER_RUSSIAN     = on    # on = скрыть 🇷🇺  российские  (IP + домен + тег + SNI)
 FILTER_INVALID_PBK = on    # on = скрыть серверы с невалидным pbk ключом Reality
-FILTER_DEAD_SNI    = off    # on = скрыть серверы у которых SNI-сайт не отвечает
+FILTER_DEAD_SNI    = on    # on = скрыть серверы у которых SNI-сайт не отвечает
 
 # Таймаут проверки SNI (секунды)
 SNI_CHECK_TIMEOUT  = 4.0
+
+# ============================================================
+# ЦЕПОЧКА ЧЕРЕЗ РОССИЙСКИЕ СЕРВЕРЫ (chain proxy)
+# ============================================================
+# Если on — зарубежные серверы проверяются через российские как прокси.
+# Российские серверы используются ТОЛЬКО внутри скрипта как инструмент.
+# В финальный список они НЕ попадают (управляется FILTER_RUSSIAN отдельно).
+
+CHAIN_PROXY = off   # on = проверять зарубежные через российские серверы
+CHAIN_TOP_N = 3     # сколько лучших российских брать в цепочку
 
 # Этап 1 — быстрый TCP-пинг
 TCP_WORKERS    = 100
@@ -282,6 +292,109 @@ def _check_sni(url: str) -> bool:
     except Exception:
         _sni_cache[sni] = False
         return False
+
+
+
+# ============================================================
+# ЦЕПОЧКА ЧЕРЕЗ РОССИЙСКИЕ СЕРВЕРЫ
+# ============================================================
+
+# Глобальное хранилище топ-российских серверов для цепочки
+_chain_servers: list = []
+_chain_ports:   list = []   # локальные SOCKS5 порты поднятых xray процессов
+_chain_procs:   list = []   # запущенные xray процессы цепочки
+
+def _start_chain_proxies(ru_results: list) -> bool:
+    """
+    Запускает xray процессы для топ-N российских серверов.
+    Каждый поднимает локальный HTTP-прокси на порту 19900+N.
+    Возвращает True если хотя бы один запустился.
+    """
+    global _chain_servers, _chain_ports, _chain_procs
+    _chain_servers = ru_results[:CHAIN_TOP_N]
+    _chain_ports   = []
+    _chain_procs   = []
+
+    base_port = 19900
+    for i, (url, *_) in enumerate(_chain_servers):
+        port = base_port + i
+        parsed = VLESS_REGEX.match(url)
+        if not parsed:
+            continue
+        cfg = _build_xray_config(parsed.groupdict(), port)
+        cfg_path = f"/tmp/chain_xray_{i}.json"
+        with open(cfg_path, 'w') as f:
+            json.dump(cfg, f)
+        try:
+            proc = subprocess.Popen(
+                [XRAY_BIN, 'run', '-c', cfg_path],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            if _wait_for_port('127.0.0.1', port, 4.0):
+                _chain_ports.append(port)
+                _chain_procs.append(proc)
+                print(f"  Цепочка [{i+1}] запущена на порту {port}")
+            else:
+                proc.kill()
+        except Exception as e:
+            print(f"  Цепочка [{i+1}] не запустилась: {e}")
+
+    return len(_chain_ports) > 0
+
+
+def _stop_chain_proxies():
+    """Останавливает все xray процессы цепочки."""
+    for proc in _chain_procs:
+        try:
+            proc.kill()
+        except Exception:
+            pass
+    _chain_procs.clear()
+    _chain_ports.clear()
+
+
+def _test_via_chain(url: str) -> tuple | None:
+    """
+    Проверяет сервер через цепочку российских прокси.
+    Пробует каждый порт цепочки по очереди, берёт лучший результат.
+    """
+    if not _chain_ports:
+        return None
+
+    best = None
+    for port in _chain_ports:
+        # Временно подменяем TEST_URLS запросом через прокси цепочки
+        try:
+            proxies = {
+                'http':  f'http://127.0.0.1:{port}',
+                'https': f'http://127.0.0.1:{port}',
+            }
+            scores = []
+            for test_url in TEST_URLS[:2]:  # проверяем только 2 URL для скорости
+                try:
+                    t0 = time.time()
+                    r = requests.get(
+                        test_url,
+                        proxies=proxies,
+                        timeout=REQUEST_TIMEOUT,
+                        allow_redirects=True,
+                    )
+                    if r.status_code < 500:
+                        scores.append(int((time.time() - t0) * 1000))
+                except Exception:
+                    pass
+
+            if scores:
+                avg = statistics.mean(scores)
+                jitter = int(statistics.stdev(scores)) if len(scores) > 1 else 0
+                result = (url, avg, jitter, 0.0)
+                if best is None or avg < best[1]:
+                    best = result
+        except Exception:
+            pass
+
+    return best
 
 
 # ============================================================
@@ -927,6 +1040,50 @@ def run():
 
     # Сортируем все результаты по score (avg + jitter/2)
     results.sort(key=lambda x: x[1])
+
+    # --- Цепочка через российские серверы ---
+    if CHAIN_PROXY:
+        # Выделяем российские серверы из результатов xray
+        ru_for_chain = []
+        intl_for_chain = []
+        for entry in results:
+            h, _ = _extract_host_port(entry[0])
+            if _is_russian_server(h or '', entry[0]):
+                ru_for_chain.append(entry)
+            else:
+                intl_for_chain.append(entry)
+
+        if ru_for_chain:
+            print(f"\n[ЦЕПОЧКА] Найдено российских серверов: {len(ru_for_chain)}")
+            print(f"  Запускаем топ-{CHAIN_TOP_N} как прокси...")
+            started = _start_chain_proxies(ru_for_chain)
+
+            if started:
+                print(f"  Перепроверяем {len(intl_for_chain)} зарубежных через цепочку...")
+                chain_results = []
+                with concurrent.futures.ThreadPoolExecutor(max_workers=XRAY_WORKERS) as ex:
+                    futures = {ex.submit(_test_via_chain, e[0]): e for e in intl_for_chain}
+                    done = 0
+                    for future in concurrent.futures.as_completed(futures):
+                        done += 1
+                        res = future.result()
+                        if res:
+                            chain_results.append(res)
+                        if done % 10 == 0 or done == len(intl_for_chain):
+                            print(f"  Прогресс цепочки: {done}/{len(intl_for_chain)}")
+
+                _stop_chain_proxies()
+                print(f"  Через цепочку прошли: {len(chain_results)} серверов")
+
+                # Заменяем зарубежные результаты на проверенные через цепочку
+                # Российские добавляем обратно (они нужны для дальнейшей фильтрации)
+                results = chain_results + ru_for_chain
+                results.sort(key=lambda x: x[1])
+            else:
+                print("  Не удалось запустить ни один российский сервер в цепочку.")
+                print("  Используем обычные результаты.")
+        else:
+            print("[ЦЕПОЧКА] Российских серверов не найдено — пропускаем.")
 
     # --- Применяем фильтры ---
     any_filter = (FILTER_INSECURE or FILTER_LOCK or FILTER_RUSSIAN
