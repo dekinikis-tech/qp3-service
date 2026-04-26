@@ -9,7 +9,7 @@ FILE_NAME   = "vps.txt"
 SUB_FILE    = "sub.txt"    # Base64-подписка для V2RayNG / Nekobox / Streisand
 VIEWER_FILE = "index.html"
 XRAY_BIN    = "xray"
-TOP_N_EACH  = 300   # топ отдельно для зарубежных И для российских
+TOP_N_EACH  = 500   # топ отдельно для зарубежных И для российских
 
 # ============================================================
 # ФИЛЬТРЫ СЕРВЕРОВ
@@ -18,7 +18,7 @@ on  = True   # псевдоним для удобства
 off = False  # псевдоним для удобства
 
 FILTER_INSECURE = on    # on = скрыть ⚠️  небезопасные (нет TLS / allowInsecure=1)
-FILTER_LOCK     = on   # on = скрыть 🔒  обычный TLS  (оставить только Reality 🔑)
+FILTER_LOCK     = off   # on = скрыть 🔒  обычный TLS  (оставить только Reality 🔑)
 FILTER_RUSSIAN  = on    # on = скрыть 🇷🇺  российские  (IP + домен + тег + SNI)
 
 # Этап 1 — быстрый TCP-пинг
