@@ -386,10 +386,11 @@ def _test_via_chain(url: str) -> tuple | None:
                     pass
 
             if scores:
-                avg = statistics.mean(scores)
+                avg = int(statistics.mean(scores))
                 jitter = int(statistics.stdev(scores)) if len(scores) > 1 else 0
-                result = (url, avg, jitter, 0.0)
-                if best is None or avg < best[1]:
+                score = avg + jitter // 2
+                result = (url, score, avg, jitter, 0)
+                if best is None or avg < best[2]:
                     best = result
         except Exception:
             pass
