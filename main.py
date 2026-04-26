@@ -18,7 +18,7 @@ on  = True   # псевдоним для удобства
 off = False  # псевдоним для удобства
 
 FILTER_INSECURE = on    # on = скрыть ⚠️  небезопасные (нет TLS / allowInsecure=1)
-FILTER_LOCK     = off   # on = скрыть 🔒  обычный TLS  (оставить только Reality 🔑)
+FILTER_LOCK     = on   # on = скрыть 🔒  обычный TLS  (оставить только Reality 🔑)
 FILTER_RUSSIAN  = on    # on = скрыть 🇷🇺  российские  (IP + домен + тег + SNI)
 
 # Этап 1 — быстрый TCP-пинг
