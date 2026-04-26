@@ -9,7 +9,7 @@ FILE_NAME   = "vps.txt"
 SUB_FILE    = "sub.txt"    # Base64-подписка для V2RayNG / Nekobox / Streisand
 VIEWER_FILE = "index.html"
 XRAY_BIN    = "xray"
-TOP_N_EACH  = 100   # топ отдельно для зарубежных И для российских
+TOP_N_EACH  = 600   # топ отдельно для зарубежных И для российских
 
 # ============================================================
 # ФИЛЬТРЫ СЕРВЕРОВ
@@ -21,7 +21,7 @@ FILTER_INSECURE    = on    # on = скрыть ⚠️  небезопасные 
 FILTER_LOCK        = on    # on = скрыть 🔒  обычный TLS  (оставить только Reality 🔑)
 FILTER_RUSSIAN     = on    # on = скрыть 🇷🇺  российские  (IP + домен + тег + SNI)
 FILTER_INVALID_PBK = on    # on = скрыть серверы с невалидным pbk ключом Reality
-FILTER_DEAD_SNI    = on    # on = скрыть серверы у которых SNI-сайт не отвечает
+FILTER_DEAD_SNI    = off    # on = скрыть серверы у которых SNI-сайт не отвечает
 
 # Таймаут проверки SNI (секунды)
 SNI_CHECK_TIMEOUT  = 4.0
