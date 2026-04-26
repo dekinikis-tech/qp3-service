@@ -1,9 +1,7 @@
 name: VPN Auto Update
 
 on:
-  schedule:
-    - cron: '0 * * * *'
-  workflow_dispatch:
+  workflow_dispatch: # Позволяет запускать проверку вручную кнопкой в интерфейсе GitHub
 
 # Новый запуск автоматически отменяет предыдущий
 concurrency:
@@ -13,7 +11,7 @@ concurrency:
 jobs:
   update_gist:
     runs-on: ubuntu-latest
-    # Жёсткий лимит: если за 25 минут не уложились — убиваем
+    # Жёсткий лимит: если за 60 минут не уложились — убиваем
     timeout-minutes: 60
 
     steps:
