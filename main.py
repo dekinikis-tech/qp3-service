@@ -11,6 +11,13 @@ VIEWER_FILE = "index.html"
 XRAY_BIN    = "xray"
 TOP_N_EACH  = 100   # топ отдельно для зарубежных И для российских
 
+on  = True
+off = False
+
+FILTER_INSECURE  = on    # on = скрыть серверы с ⚠️  (нет TLS / allowInsecure=1)
+FILTER_TLS_LOCK  = off   # on = скрыть серверы с 🔒  (обычный TLS, только Reality 🔑)
+FILTER_RUSSIAN   = on    # on = скрыть серверы с 🇷🇺  (российские IP/домены)
+
 # Этап 1 — быстрый TCP-пинг
 TCP_WORKERS    = 100
 TCP_TIMEOUT    = 1.5
@@ -761,6 +768,9 @@ def run():
     print(f"  Топ каждой гео: {TOP_N_EACH}")
     print(f"  Динамический таймаут (MY_SLOW_NET): {'ВКЛ' if _slow else 'ВЫКЛ'}")
     print(f"  Google-бан фильтр: ВКЛ")
+    print(f"  Фильтр ⚠️  небезопасных (FILTER_INSECURE): {'ВКЛ' if FILTER_INSECURE else 'ВЫКЛ'}")
+    print(f"  Фильтр 🔒 TLS-серверов (FILTER_TLS_LOCK): {'ВКЛ' if FILTER_TLS_LOCK else 'ВЫКЛ'}")
+    print(f"  Фильтр 🇷🇺 русских серверов (FILTER_RUSSIAN): {'ВКЛ' if FILTER_RUSSIAN else 'ВЫКЛ'}")
     print(f"  Base64-подписка: {SUB_FILE}")
     print("=" * 60)
 
@@ -815,6 +825,30 @@ def run():
 
     # Сортируем все результаты по score (avg + jitter/2)
     results.sort(key=lambda x: x[1])
+
+    # ---- Применяем фильтры ----
+    filtered_out = 0
+    filtered = []
+    for entry in results:
+        url = entry[0]
+        sec_level, _, _ = _get_security_level(url)
+        host, port = _extract_host_port(url)
+        is_ru = _is_russian_server(host or '')
+
+        if FILTER_INSECURE and sec_level == 'insecure':
+            filtered_out += 1
+            continue
+        if FILTER_TLS_LOCK and sec_level == 'secure':
+            filtered_out += 1
+            continue
+        if FILTER_RUSSIAN and is_ru:
+            filtered_out += 1
+            continue
+        filtered.append(entry)
+
+    if filtered_out:
+        print(f"\n  Отфильтровано настройками (⚠️/🔒/🇷🇺): {filtered_out} серверов")
+    results = filtered
 
     # Делим по адресу сервера
     intl_all = []
