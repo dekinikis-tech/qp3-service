@@ -18,7 +18,7 @@ on  = True   # псевдоним для удобства
 off = False  # псевдоним для удобства
 
 FILTER_INSECURE    = on    # on = скрыть ⚠️  небезопасные (нет TLS / allowInsecure=1)
-FILTER_LOCK        = on    # on = скрыть 🔒  обычный TLS  (оставить только Reality 🔑)
+FILTER_LOCK        = on   # on = скрыть 🔒  обычный TLS  (оставить только Reality 🔑)
 FILTER_RUSSIAN     = on    # on = скрыть 🇷🇺  российские  (IP + домен + тег + SNI)
 FILTER_INVALID_PBK = on    # on = скрыть серверы с невалидным pbk ключом Reality
 FILTER_DEAD_SNI    = on    # on = скрыть серверы у которых SNI-сайт не отвечает
@@ -33,7 +33,7 @@ SNI_CHECK_TIMEOUT  = 4.0
 # Российские серверы используются ТОЛЬКО внутри скрипта как инструмент.
 # В финальный список они НЕ попадают (управляется FILTER_RUSSIAN отдельно).
 
-CHAIN_PROXY = off   # on = проверять зарубежные через российские серверы
+CHAIN_PROXY = on   # on = проверять зарубежные через российские серверы
 CHAIN_TOP_N = 5     # сколько лучших российских брать в цепочку
 
 # Этап 1 — быстрый TCP-пинг
@@ -386,11 +386,10 @@ def _test_via_chain(url: str) -> tuple | None:
                     pass
 
             if scores:
-                avg = int(statistics.mean(scores))
+                avg = statistics.mean(scores)
                 jitter = int(statistics.stdev(scores)) if len(scores) > 1 else 0
-                score = avg + jitter // 2
-                result = (url, score, avg, jitter, 0)
-                if best is None or avg < best[2]:
+                result = (url, avg, jitter, 0.0)
+                if best is None or avg < best[1]:
                     best = result
         except Exception:
             pass
@@ -832,7 +831,7 @@ def generate_html_viewer(intl_results: list, ru_results: list, elapsed: int) -> 
                 f'<td style="padding:9px 10px;color:{pc};font-weight:700">{avg}ms</td>'
                 f'<td style="padding:9px 10px;color:#718096">{jitter}ms</td>'
                 f'<td style="padding:9px 10px;color:{"#06d6a0" if loss_pct==0 else "#ef476f"}">{loss_pct}%</td>'
-                f'<td style="padding:9px 10px"><button onclick="copyVpn(this)" data-url="{safe_url}" style="background:#0d2b33;border:1px solid #005f6b;color:#00e5ff;border-radius:5px;padding:4px 10px;cursor:pointer;font-size:13px">Copy</button></td>'
+                f'<td style="padding:9px 10px;white-space:nowrap"><button onclick="copyVpn(this)" data-url="{safe_url}" style="background:#0d2b33;border:1px solid #005f6b;color:#00e5ff;border-radius:5px;padding:4px 10px;cursor:pointer;font-size:13px;margin-right:6px">Copy</button><span class="ping-live" data-host="{host or ""}" style="font-size:12px;color:#4a5568">—</span></td>'
                 f'</tr>'
             )
         return '\n'.join(rows)
@@ -905,9 +904,13 @@ tbody tr:hover {{ background:#161b26; }}
   <div class="stat"><div class="stat-num" style="color:#06d6a0">{best_ping}ms</div><div class="stat-lbl">Лучший пинг</div></div>
 </div>
 
-<div class="tab-bar">
+<div class="tab-bar" style="display:flex;align-items:center;flex-wrap:wrap;gap:8px">
   <button class="tab-btn active-intl" id="btn-intl" onclick="showTab('intl')">🌍 Зарубежные ({len(intl_results)})</button>
   <button class="tab-btn" id="btn-ru" onclick="showTab('ru')">🇷🇺 Российские ({len(ru_results)})</button>
+  <button id="btn-pingall" onclick="pingAll()" style="margin-left:auto;background:#1a1040;border:2px solid #a78bfa;color:#a78bfa;border-radius:8px;padding:10px 22px;font-size:14px;font-weight:700;cursor:pointer">
+    ⚡ Проверить все с моего IP
+  </button>
+  <span id="ping-status" style="font-size:12px;color:#718096"></span>
 </div>
 
 <div class="section visible" id="sec-intl">
@@ -964,6 +967,79 @@ function copyVpn(btn) {{
     }}, 1500);
   }} catch(e) {{ alert('Не удалось скопировать'); }}
   document.body.removeChild(ta);
+}}
+
+// ─── Проверка пинга с браузера пользователя ───────────────
+async function pingHost(host) {{
+  if (!host) return null;
+  // Пробуем несколько эндпоинтов чтобы обойти CORS
+  var targets = [
+    'https://' + host + '/favicon.ico',
+    'https://' + host + '/robots.txt',
+    'https://' + host + '/',
+  ];
+  for (var i = 0; i < targets.length; i++) {{
+    try {{
+      var t0 = performance.now();
+      await fetch(targets[i], {{
+        mode: 'no-cors',
+        cache: 'no-store',
+        signal: AbortSignal.timeout(5000)
+      }});
+      return Math.round(performance.now() - t0);
+    }} catch(e) {{
+      // таймаут или сеть — пробуем следующий
+    }}
+  }}
+  return null;
+}}
+
+async function pingAll() {{
+  var btn = document.getElementById('btn-pingall');
+  var status = document.getElementById('ping-status');
+  btn.disabled = true;
+  btn.textContent = '⏳ Проверяю...';
+  btn.style.opacity = '0.6';
+
+  var spans = document.querySelectorAll('.ping-live');
+  var total = spans.length;
+  var done  = 0;
+
+  // Запускаем проверку пачками по 10 параллельно
+  var BATCH = 10;
+  for (var i = 0; i < spans.length; i += BATCH) {{
+    var batch = Array.from(spans).slice(i, i + BATCH);
+    await Promise.all(batch.map(async function(span) {{
+      var host = span.getAttribute('data-host');
+      span.textContent = '...';
+      span.style.color = '#718096';
+      var ms = await pingHost(host);
+      done++;
+      status.textContent = done + '/' + total;
+      if (ms === null) {{
+        span.textContent = '✗';
+        span.style.color = '#ef476f';
+      }} else if (ms < 300) {{
+        span.textContent = ms + 'ms';
+        span.style.color = '#06d6a0';
+        span.style.fontWeight = '700';
+      }} else if (ms < 1000) {{
+        span.textContent = ms + 'ms';
+        span.style.color = '#ffd166';
+        span.style.fontWeight = '700';
+      }} else {{
+        span.textContent = ms + 'ms';
+        span.style.color = '#ef476f';
+        span.style.fontWeight = '700';
+      }}
+    }}));
+  }}
+
+  btn.disabled = false;
+  btn.textContent = '🔄 Проверить снова';
+  btn.style.opacity = '1';
+  status.textContent = '✓ Готово (' + total + ' серверов)';
+  status.style.color = '#06d6a0';
 }}
 </script>
 </body>
