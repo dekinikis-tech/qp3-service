@@ -1,6 +1,3 @@
-bash
-
-cat > /home/claude/main.py << 'ENDOFFILE'
 import requests, os, re, subprocess, json, time, concurrent.futures
 import urllib.parse, queue, socket, statistics, base64, urllib.request as url_req
 
@@ -1396,8 +1393,3 @@ def run():
 
 if __name__ == "__main__":
     run()
-ENDOFFILE
-echo "Written"
-Output
-
-Written
