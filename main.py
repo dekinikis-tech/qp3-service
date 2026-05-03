@@ -18,7 +18,7 @@ on  = True   # псевдоним для удобства
 off = False  # псевдоним для удобства
 
 FILTER_INSECURE    = on    # on = скрыть ⚠️  небезопасные (нет TLS / allowInsecure=1)
-FILTER_LOCK        = on   # on = скрыть 🔒  обычный TLS  (оставить только Reality 🔑)
+FILTER_LOCK        = on    # on = скрыть 🔒  обычный TLS  (оставить только Reality 🔑)
 FILTER_RUSSIAN     = on    # on = скрыть 🇷🇺  российские  (IP + домен + тег + SNI)
 FILTER_INVALID_PBK = on    # on = скрыть серверы с невалидным pbk ключом Reality
 FILTER_DEAD_SNI    = on    # on = скрыть серверы у которых SNI-сайт не отвечает
@@ -388,7 +388,7 @@ def _test_via_chain(url: str) -> tuple | None:
             if scores:
                 avg = statistics.mean(scores)
                 jitter = int(statistics.stdev(scores)) if len(scores) > 1 else 0
-                result = (url, avg, jitter, 0.0)
+                result = (url, int(avg), int(avg), int(jitter), 0)
                 if best is None or avg < best[1]:
                     best = result
         except Exception:
