@@ -1233,20 +1233,29 @@ def run():
                 _stop_chain_proxies()
                 print(f"  Через цепочку прошли: {len(chain_results)} из {len(intl_for_chain)} зарубежных")
 
-                # Только зарубежные — РФ-серверы выброшены как расходный материал
-                results = chain_results
+                # РФ-серверы использовались как инструмент тестирования.
+                # В финал попадают только если FILTER_RUSSIAN = off.
+                if FILTER_RUSSIAN:
+                    results = chain_results
+                else:
+                    results = chain_results + ru_for_chain
                 results.sort(key=lambda x: x[1])
             else:
                 print("  Не удалось запустить ни один российский сервер.")
-                print("  Используем обычные зарубежные результаты без цепочки.")
-                results = intl_for_chain
+                print("  Используем обычные результаты без цепочки.")
+                if FILTER_RUSSIAN:
+                    results = intl_for_chain
+                else:
+                    results = intl_for_chain + ru_for_chain
+                results.sort(key=lambda x: x[1])
         else:
             print("[ЦЕПОЧКА] Российских серверов не найдено — пропускаем.")
 
-    # --- Фильтры ---
-    # Примечание: FILTER_RUSSIAN здесь уже не нужен если CHAIN_PROXY включён,
-    # но оставляем для случая когда цепочка выключена.
-    any_filter = (FILTER_INSECURE or FILTER_LOCK or FILTER_RUSSIAN
+    # --- Фильтры (insecure / lock / pbk / sni) ---
+    # FILTER_RUSSIAN при CHAIN_PROXY=on уже отработал выше на этапе цепочки.
+    # При CHAIN_PROXY=off — отрабатывает здесь как обычный фильтр.
+    any_filter = (FILTER_INSECURE or FILTER_LOCK
+                  or (FILTER_RUSSIAN and not CHAIN_PROXY)
                   or FILTER_INVALID_PBK or FILTER_DEAD_SNI)
     if any_filter:
         before = len(results)
@@ -1269,7 +1278,7 @@ def run():
                 cnt_insecure += 1; continue
             if FILTER_LOCK and sec_level == 'secure':
                 cnt_lock += 1; continue
-            if FILTER_RUSSIAN and is_ru:
+            if FILTER_RUSSIAN and not CHAIN_PROXY and is_ru:
                 cnt_ru += 1; continue
             if FILTER_INVALID_PBK and not _check_pbk(url):
                 cnt_pbk += 1; continue
@@ -1285,9 +1294,17 @@ def run():
         if cnt_pbk:      print(f"    🔑 невалидный pbk      : {cnt_pbk}")
         if cnt_sni:      print(f"    🌐 мёртвый SNI-сайт    : {cnt_sni}")
 
-    # Все выжившие — зарубежные (РФ уже выброшены на этапе цепочки)
-    intl_results = results[:TOP_N_EACH]
-    ru_results   = []  # РФ-серверы не попадают в финал
+    # Разделяем финал на зарубежные и российские для HTML-viewer
+    intl_results = []
+    ru_results   = []
+    for entry in results:
+        h, _ = _extract_host_port(entry[0])
+        if _is_russian_server(h or '', entry[0]):
+            ru_results.append(entry)
+        else:
+            intl_results.append(entry)
+    intl_results = intl_results[:TOP_N_EACH]
+    ru_results   = ru_results[:TOP_N_EACH]
 
     elapsed_total = int(time.time() - t_start)
     print(f"\n{'─'*60}")
