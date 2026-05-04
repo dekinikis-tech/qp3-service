@@ -23,7 +23,7 @@ off = False
 
 FILTER_INSECURE     = on   # Удаляет серверы без шифрования (защита от перехвата)
 FILTER_LOCK         = on   # Оставляет ТОЛЬКО Reality. Остальное (TLS, Hysteria) удаляется
-FILTER_RUSSIAN      = off   # Полностью исключает серверы, находящиеся в РФ[cite: 1]
+FILTER_RUSSIAN      = on   # Полностью исключает серверы, находящиеся в РФ[cite: 1]
 FILTER_INVALID_PBK  = on   # Удаляет конфиги с битыми ключами Reality[cite: 1]
 FILTER_DEAD_SNI     = on   # Удаляет серверы, если их сайт-маскировка не отвечает[cite: 1]
 
