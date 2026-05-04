@@ -20,20 +20,18 @@ GEOIP_DB_PATH = os.environ.get('GEOIP_DB', 'GeoLite2-Country.mmdb')
 # ============================================================
 on  = True
 off = False
-
-FILTER_INSECURE     = on   # Удаляет серверы без шифрования (защита от перехвата)
-FILTER_LOCK         = on   # Оставляет ТОЛЬКО Reality. Остальное (TLS, Hysteria) удаляется
-FILTER_RUSSIAN      = on   # Полностью исключает серверы, находящиеся в РФ[cite: 1]
-FILTER_INVALID_PBK  = on   # Удаляет конфиги с битыми ключами Reality[cite: 1]
-FILTER_DEAD_SNI     = on   # Удаляет серверы, если их сайт-маскировка не отвечает[cite: 1]
-
+FILTER_INSECURE    = on    # on = скрыть ⚠️  небезопасные (нет TLS / allowInsecure=1)
+FILTER_LOCK        = on    # on = скрыть 🔒  обычный TLS  (оставить только Reality 🔑)
+FILTER_RUSSIAN     = on    # on = скрыть 🇷🇺  российские  (IP + домен + тег + SNI)
+FILTER_INVALID_PBK = on    # on = скрыть серверы с невалидным pbk ключом Reality
+FILTER_DEAD_SNI    = on    # on = скрыть серверы у которых SNI-сайт не отвечает
 SNI_CHECK_TIMEOUT  = 4.0
 
 # ============================================================
 # ЦЕПОЧКА ЧЕРЕЗ РОССИЙСКИЕ СЕРВЕРЫ (chain proxy)
 # ============================================================
 CHAIN_PROXY = on
-CHAIN_TOP_N = 8
+CHAIN_TOP_N = 9
 
 # Этап 1
 TCP_WORKERS    = 100
