@@ -1,5 +1,6 @@
 import requests, os, re, subprocess, json, time, concurrent.futures
 import urllib.parse, queue, socket, statistics, base64, urllib.request as url_req
+import ssl
 
 # ============================================================
 # НАСТРОЙКИ
@@ -10,6 +11,9 @@ SUB_FILE    = "sub.txt"
 VIEWER_FILE = "index.html"
 XRAY_BIN    = "xray"
 TOP_N_EACH  = 900
+
+# Путь к базе GeoLite2 (скачивается в workflow)
+GEOIP_DB_PATH = os.environ.get('GEOIP_DB', 'GeoLite2-Country.mmdb')
 
 # ============================================================
 # ФИЛЬТРЫ СЕРВЕРОВ
@@ -37,8 +41,8 @@ TCP_TIMEOUT    = 1.5
 
 # Этап 2
 _slow = os.environ.get('MY_SLOW_NET') == '1'
-XRAY_WORKERS       = 15
-PING_ROUNDS        = 3
+XRAY_WORKERS       = 25
+PING_ROUNDS        = 2
 MAX_PING_MS        = 6000  if _slow else 4000
 MAX_LOSS_RATE      = 0.67  if _slow else 0.5
 REQUEST_TIMEOUT    = 12.0  if _slow else 7.0
@@ -73,66 +77,6 @@ BLOCKED_IPS = (
     '51.250.', '84.201.',
 )
 
-RU_IP_PREFIXES = (
-    '46.8.', '46.17.', '46.29.', '46.36.', '46.39.', '46.40.', '46.41.',
-    '46.101.', '46.102.', '46.148.', '77.37.', '77.91.', '79.133.', '79.174.',
-    '80.64.', '80.87.', '80.240.', '80.250.', '82.146.', '82.148.', '83.166.',
-    '83.220.', '83.222.', '85.10.', '85.119.', '85.142.', '85.143.', '85.209.',
-    '86.62.', '87.117.', '87.249.', '88.218.', '89.108.', '89.110.', '89.111.',
-    '89.249.', '90.150.', '90.156.', '91.90.', '91.108.', '91.185.', '91.193.',
-    '91.194.', '91.213.', '91.215.', '91.217.', '91.219.', '91.220.', '91.221.',
-    '91.222.', '91.223.', '92.63.', '92.119.', '92.222.', '93.95.', '93.153.',
-    '93.157.', '93.158.', '94.26.', '94.130.', '94.140.', '94.142.', '94.143.',
-    '94.154.', '94.247.', '95.46.', '95.47.', '95.165.', '95.213.', '95.215.',
-    '95.216.', '95.217.', '95.241.', '95.247.', '101.42.', '103.21.', '109.71.',
-    '109.172.', '109.195.', '109.234.', '178.18.', '178.21.', '178.124.', '178.137.',
-    '178.154.', '178.155.', '185.4.', '185.6.', '185.7.', '185.12.', '185.16.',
-    '185.22.', '185.36.', '185.55.', '185.67.', '185.68.', '185.71.', '185.80.',
-    '185.83.', '185.87.', '185.100.', '185.103.', '185.105.', '185.112.', '185.123.',
-    '185.126.', '185.130.', '185.133.', '185.146.', '185.151.', '185.161.', '185.163.',
-    '185.164.', '185.170.', '185.173.', '185.177.', '185.178.', '185.180.', '185.184.',
-    '185.185.', '185.188.', '185.189.', '185.190.', '185.191.', '185.192.', '185.195.',
-    '185.196.', '185.197.', '185.198.', '185.199.', '185.200.', '185.201.', '185.204.',
-    '185.209.', '185.210.', '185.211.', '185.212.', '185.215.', '185.216.', '185.220.',
-    '185.225.', '185.226.', '185.229.', '185.230.', '185.231.', '185.234.', '185.238.',
-    '185.246.', '185.247.', '195.2.', '195.3.', '195.10.', '195.12.', '195.14.',
-    '195.16.', '195.19.', '195.22.', '195.24.', '195.25.', '195.34.', '195.42.',
-    '195.43.', '195.47.', '195.49.', '195.58.', '195.62.', '195.64.', '195.65.',
-    '195.80.', '195.82.', '195.88.', '195.90.', '195.91.', '195.93.', '195.94.',
-    '195.96.', '195.128.', '195.133.', '195.144.', '195.149.', '195.151.', '195.154.',
-    '195.160.', '195.161.', '195.162.', '195.163.', '195.165.', '195.166.', '195.168.',
-    '195.170.', '195.174.', '195.175.', '195.182.', '195.184.', '195.185.', '195.189.',
-    '195.190.', '195.191.', '195.194.', '195.196.', '195.197.', '195.198.', '195.199.',
-    '195.200.', '195.201.', '195.203.', '195.204.', '195.206.', '195.208.', '195.209.',
-    '195.210.', '195.211.', '195.214.', '195.215.', '195.218.', '195.219.', '195.220.',
-    '195.222.', '195.225.', '195.226.', '195.227.', '195.230.', '195.232.', '195.233.',
-    '195.234.', '195.238.', '195.239.', '195.240.', '195.242.', '195.244.', '195.245.',
-    '195.246.', '195.248.', '195.249.', '195.250.', '195.251.', '195.253.', '195.254.',
-    '212.33.', '212.47.', '212.109.', '213.24.', '213.33.', '213.87.', '213.145.',
-    '213.148.', '213.167.', '213.183.', '213.184.', '213.188.', '213.189.', '213.194.',
-    '213.195.', '213.202.', '213.203.', '213.206.', '213.207.', '213.208.', '213.219.',
-    '213.220.', '213.222.', '213.226.', '213.227.', '213.228.', '213.230.', '213.232.',
-    '213.234.', '213.243.', '213.248.', '216.24.',
-    '5.178.',    '5.188.',    '5.189.',
-    '80.93.',    '80.249.',
-    '82.202.',   '82.203.',
-    '91.206.',   '91.207.',
-    '103.213.',
-    '217.16.',   '217.17.',
-    '158.160.',
-    '51.250.',
-    '84.201.',
-    '130.193.',
-    '62.84.',
-    '94.250.',
-)
-
-RU_DOMAIN_KEYWORDS = (
-    '.ru', '.su', 'yandex', 'vk.com', 'vk-apps', 'mail.ru',
-    'selectel', 'beget', 'reg.ru', 'timeweb', 'hetzner.ru',
-    'serverius', 'aeza.net', 'aeza.ru',
-)
-
 VLESS_REGEX = re.compile(
     r"vless://(?P<uuid>[^@]+)@(?P<host>[^:?#]+):(?P<port>\d+)\??(?P<query>[^#]+)?#?(?P<n>.*)?"
 )
@@ -152,7 +96,7 @@ for _p in range(20000, 20000 + 200):
 
 
 # ============================================================
-# ГЕОЛОКАЦИЯ
+# ГЕОЛОКАЦИЯ — GeoIP2 (geoip2) + fallback на домен/тег
 # ============================================================
 
 RU_TAG_KEYWORDS = (
@@ -166,14 +110,54 @@ RU_SNI_KEYWORDS = (
     'sber.', 'gosuslugi.', 'mos.ru', 'rmp-inc',
 )
 
+RU_DOMAIN_KEYWORDS = (
+    '.ru', '.su', 'yandex', 'vk.com', 'vk-apps', 'mail.ru',
+    'selectel', 'beget', 'reg.ru', 'timeweb', 'hetzner.ru',
+    'serverius', 'aeza.net', 'aeza.ru',
+)
+
+# Инициализируем geoip2 reader один раз при старте
+_geoip_reader = None
+
+def _init_geoip():
+    global _geoip_reader
+    if _geoip_reader is not None:
+        return
+    try:
+        import geoip2.database
+        if os.path.exists(GEOIP_DB_PATH):
+            _geoip_reader = geoip2.database.Reader(GEOIP_DB_PATH)
+            print(f"  GeoIP: база загружена из {GEOIP_DB_PATH}")
+        else:
+            print(f"  GeoIP: файл {GEOIP_DB_PATH} не найден — используем только домен/тег")
+    except ImportError:
+        print("  GeoIP: geoip2 не установлен — используем только домен/тег")
+
+def _geoip_is_russia(ip: str) -> bool | None:
+    """Возвращает True если IP российский, False если нет, None если не удалось определить."""
+    if _geoip_reader is None:
+        return None
+    try:
+        resp = _geoip_reader.country(ip)
+        return resp.country.iso_code == 'RU'
+    except Exception:
+        return None
+
 
 def _is_russian_server(address: str, url: str = '') -> bool:
-    addr_lower = address.lower()
+    # 1. GeoIP по IP-адресу (основной метод)
     if address and address[0].isdigit():
-        if address.startswith(RU_IP_PREFIXES):
-            return True
+        result = _geoip_is_russia(address)
+        if result is not None:
+            return result
+        # geoip не смог определить — продолжаем fallback
+
+    # 2. Fallback: домен
+    addr_lower = address.lower()
     if any(kw in addr_lower for kw in RU_DOMAIN_KEYWORDS):
         return True
+
+    # 3. Fallback: тег и SNI в URL
     if url:
         if '#' in url:
             tag_raw     = url.split('#', 1)[1].lower()
@@ -187,6 +171,7 @@ def _is_russian_server(address: str, url: str = '') -> bool:
             sni = urllib.parse.unquote(sni_match.group(1))
             if any(kw in sni for kw in RU_SNI_KEYWORDS):
                 return True
+
     return False
 
 
@@ -247,6 +232,10 @@ def _check_pbk(url: str) -> bool:
 _sni_cache: dict = {}
 
 def _check_sni(url: str) -> bool:
+    """
+    Проверяет SNI через реальный TLS-хендшейк (не просто TCP-пинг).
+    Убеждаемся что сертификат выдан именно для этого hostname.
+    """
     m = re.search(r'[?&]sni=([^&#+]+)', url)
     if not m:
         return True
@@ -256,11 +245,20 @@ def _check_sni(url: str) -> bool:
     if sni in _sni_cache:
         return _sni_cache[sni]
     try:
-        conn = socket.create_connection((sni, 443), timeout=SNI_CHECK_TIMEOUT)
-        conn.close()
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = True
+        ctx.verify_mode    = ssl.CERT_REQUIRED
+        raw = socket.create_connection((sni, 443), timeout=SNI_CHECK_TIMEOUT)
+        tls = ctx.wrap_socket(raw, server_hostname=sni)
+        tls.close()
         _sni_cache[sni] = True
         return True
+    except ssl.SSLCertVerificationError:
+        # Порт открыт, но сертификат не тот — именно это мы и хотели поймать
+        _sni_cache[sni] = False
+        return False
     except Exception:
+        # Таймаут, connection refused и т.д. — SNI мёртв
         _sni_cache[sni] = False
         return False
 
@@ -1150,7 +1148,11 @@ def run():
     print(f"  Фильтр 🔒  TLS-only      : {'ВКЛ' if FILTER_LOCK     else 'ВЫКЛ'}")
     print(f"  Фильтр 🇷🇺  российские   : {'ВКЛ' if FILTER_RUSSIAN  else 'ВЫКЛ'}")
     print(f"  Цепочка через РФ         : {'ВКЛ (топ-' + str(CHAIN_TOP_N) + ')' if CHAIN_PROXY else 'ВЫКЛ'}")
+    print(f"  GeoIP база               : {GEOIP_DB_PATH}")
     print("=" * 60)
+
+    # Инициализируем GeoIP один раз
+    _init_geoip()
 
     print("\n[1/4] Сбор конфигов...")
     all_configs, ru_source_keys = fetch_configs()
@@ -1199,7 +1201,9 @@ def run():
 
     results.sort(key=lambda x: x[1])
 
-    # --- Цепочка через российские серверы (SOCKS5 + proxySettings) ---
+    # --- Цепочка через российские серверы ---
+    # РФ-серверы используются ТОЛЬКО как расходный прокси для тестов,
+    # в финальный результат они не попадают.
     if CHAIN_PROXY:
         ru_for_chain   = []
         intl_for_chain = []
@@ -1232,15 +1236,19 @@ def run():
                 _stop_chain_proxies()
                 print(f"  Через цепочку прошли: {len(chain_results)} из {len(intl_for_chain)} зарубежных")
 
-                results = chain_results + ru_for_chain
+                # Только зарубежные — РФ-серверы выброшены как расходный материал
+                results = chain_results
                 results.sort(key=lambda x: x[1])
             else:
                 print("  Не удалось запустить ни один российский сервер.")
-                print("  Используем обычные результаты без цепочки.")
+                print("  Используем обычные зарубежные результаты без цепочки.")
+                results = intl_for_chain
         else:
             print("[ЦЕПОЧКА] Российских серверов не найдено — пропускаем.")
 
     # --- Фильтры ---
+    # Примечание: FILTER_RUSSIAN здесь уже не нужен если CHAIN_PROXY включён,
+    # но оставляем для случая когда цепочка выключена.
     any_filter = (FILTER_INSECURE or FILTER_LOCK or FILTER_RUSSIAN
                   or FILTER_INVALID_PBK or FILTER_DEAD_SNI)
     if any_filter:
@@ -1248,7 +1256,7 @@ def run():
 
         if FILTER_DEAD_SNI:
             sni_urls = list({entry[0] for entry in results})
-            print(f"  Проверка SNI-сайтов ({len(sni_urls)} уникальных)...")
+            print(f"  Проверка SNI-сайтов ({len(sni_urls)} уникальных, TLS-хендшейк)...")
             with concurrent.futures.ThreadPoolExecutor(max_workers=30) as ex:
                 list(ex.map(_check_sni, sni_urls))
 
@@ -1276,28 +1284,18 @@ def run():
         print(f"  Фильтры убрали: {before - len(results)} серверов  (осталось {len(results)})")
         if cnt_insecure: print(f"    ⚠️  небезопасных убрано : {cnt_insecure}")
         if cnt_lock:     print(f"    🔒 TLS-only убрано     : {cnt_lock}")
-        if cnt_ru:       print(f"    🇷🇺 российских убрано  : {cnt_ru}" + (" (использовались в цепочке)" if CHAIN_PROXY else ""))
+        if cnt_ru:       print(f"    🇷🇺 российских убрано  : {cnt_ru}")
         if cnt_pbk:      print(f"    🔑 невалидный pbk      : {cnt_pbk}")
         if cnt_sni:      print(f"    🌐 мёртвый SNI-сайт    : {cnt_sni}")
 
-    intl_all = []
-    ru_all   = []
-    for entry in results:
-        host, port = _extract_host_port(entry[0])
-        key = f"{host}:{port}" if host and port else ""
-        if key in ru_source_keys:
-            ru_all.append(entry)
-        else:
-            intl_all.append(entry)
-
-    intl_results = intl_all[:TOP_N_EACH]
-    ru_results   = ru_all[:TOP_N_EACH]
+    # Все выжившие — зарубежные (РФ уже выброшены на этапе цепочки)
+    intl_results = results[:TOP_N_EACH]
+    ru_results   = []  # РФ-серверы не попадают в финал
 
     elapsed_total = int(time.time() - t_start)
     print(f"\n{'─'*60}")
-    print(f"  Всего: {len(all_configs)} -> TCP: {len(alive)} -> xray: {len(results)}")
-    print(f"  Зарубежных: найдено {len(intl_all)}, в топе: {len(intl_results)}")
-    print(f"  Российских: найдено {len(ru_all)}, в топе: {len(ru_results)}")
+    print(f"  Всего: {len(all_configs)} -> TCP: {len(alive)} -> финал: {len(intl_results)}")
+    print(f"  Зарубежных в топе: {len(intl_results)}")
     print(f"  Время: {elapsed_total}с")
     print(f"{'─'*60}")
 
@@ -1307,15 +1305,8 @@ def run():
         name = urllib.parse.unquote(url.split('#')[-1])[:40] if '#' in url else url[8:48]
         print(f"  {i:<3} {avg:>5}мс  jitter:{jitter:>4}мс  loss:{losses}/{PING_ROUNDS}  {sec_icon} {name}")
 
-    if ru_results:
-        print("\n  Топ-10 российских:")
-        for i, (url, score, avg, jitter, losses) in enumerate(ru_results[:10], 1):
-            _, sec_icon, _ = _get_security_level(url)
-            name = urllib.parse.unquote(url.split('#')[-1])[:40] if '#' in url else url[8:48]
-            print(f"  {i:<3} {avg:>5}мс  jitter:{jitter:>4}мс  loss:{losses}/{PING_ROUNDS}  {sec_icon} {name}")
-
     tagged_urls = []
-    for r in intl_results + ru_results:
+    for r in intl_results:
         url = r[0]
         _, sec_icon, _ = _get_security_level(url)
         if '#' in url:
