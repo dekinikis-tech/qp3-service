@@ -125,13 +125,10 @@ def _init_geoip():
         return
     try:
         import geoip2.database
-        if os.path.exists(GEOIP_DB_PATH):
-            _geoip_reader = geoip2.database.Reader(GEOIP_DB_PATH)
-            print(f"  GeoIP: база загружена из {GEOIP_DB_PATH}")
-        else:
-            print(f"  GeoIP: файл {GEOIP_DB_PATH} не найден — используем только домен/тег")
-    except ImportError:
-        print("  GeoIP: geoip2 не установлен — используем только домен/тег")
+        _geoip_reader = geoip2.database.Reader(GEOIP_DB_PATH)
+        print(f"  GeoIP: база загружена из {GEOIP_DB_PATH}")
+    except Exception as e:
+        print(f"  GeoIP: не удалось загрузить базу ({e}) — используем только домен/тег")
 
 def _geoip_is_russia(ip: str) -> bool | None:
     """Возвращает True если IP российский, False если нет, None если не удалось определить."""
