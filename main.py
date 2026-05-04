@@ -1198,113 +1198,110 @@ def run():
 
     results.sort(key=lambda x: x[1])
 
-    # --- Цепочка через российские серверы ---
-    # РФ-серверы используются ТОЛЬКО как расходный прокси для тестов,
-    # в финальный результат они не попадают.
-    if CHAIN_PROXY:
-        ru_for_chain   = []
-        intl_for_chain = []
-        for entry in results:
-            h, _ = _extract_host_port(entry[0])
-            if _is_russian_server(h or '', entry[0]):
-                ru_for_chain.append(entry)
-            else:
-                intl_for_chain.append(entry)
+    # ----------------------------------------------------------------
+    # Помечаем каждый результат флагом is_ru один раз — используется везде
+    # ----------------------------------------------------------------
+    tagged = []
+    for entry in results:
+        h, _ = _extract_host_port(entry[0])
+        is_ru = _is_russian_server(h or '', entry[0])
+        tagged.append((entry, is_ru))
 
-        if ru_for_chain:
-            print(f"\n[ЦЕПОЧКА] Найдено российских серверов: {len(ru_for_chain)}")
+    ru_pool   = [e for e, is_ru in tagged if     is_ru]   # все РФ после xray
+    intl_pool = [e for e, is_ru in tagged if not is_ru]   # все зарубежные после xray
+
+    # ----------------------------------------------------------------
+    # Цепочка через российские серверы
+    # Логика: РФ-серверы поднимаются как SOCKS5 и используются для
+    # перепроверки зарубежных с российского IP. После этого:
+    #   FILTER_RUSSIAN=on  → РФ-серверы выброшены, в финал не идут
+    #   FILTER_RUSSIAN=off → РФ-серверы добавляются в финал
+    #                        но БЕЗ перепроверки через цепочку
+    #                        (они сами и есть цепочка, тестировать их
+    #                         через себя нет смысла)
+    # ----------------------------------------------------------------
+    if CHAIN_PROXY:
+        if ru_pool:
+            print(f"\n[ЦЕПОЧКА] Найдено российских серверов: {len(ru_pool)}")
             print(f"  Запускаем топ-{CHAIN_TOP_N} как SOCKS5 прокси...")
-            started = _start_chain_proxies(ru_for_chain)
+            started = _start_chain_proxies(ru_pool)
 
             if started:
-                print(f"  Перепроверяем {len(intl_for_chain)} зарубежных через российскую цепочку...")
+                print(f"  Перепроверяем {len(intl_pool)} зарубежных через российскую цепочку...")
                 chain_results = []
                 with concurrent.futures.ThreadPoolExecutor(max_workers=XRAY_WORKERS) as ex:
-                    futures = {ex.submit(_test_via_chain, e[0]): e for e in intl_for_chain}
+                    futures = {ex.submit(_test_via_chain, e[0]): e for e in intl_pool}
                     done = 0
                     for future in concurrent.futures.as_completed(futures):
                         done += 1
                         res = future.result()
                         if res:
                             chain_results.append(res)
-                        if done % 10 == 0 or done == len(intl_for_chain):
-                            print(f"  Прогресс цепочки: {done}/{len(intl_for_chain)}  |  Прошли: {len(chain_results)}")
+                        if done % 10 == 0 or done == len(intl_pool):
+                            print(f"  Прогресс цепочки: {done}/{len(intl_pool)}  |  Прошли: {len(chain_results)}")
 
                 _stop_chain_proxies()
-                print(f"  Через цепочку прошли: {len(chain_results)} из {len(intl_for_chain)} зарубежных")
-
-                # РФ-серверы использовались как инструмент тестирования.
-                # В финал попадают только если FILTER_RUSSIAN = off.
-                if FILTER_RUSSIAN:
-                    results = chain_results
-                else:
-                    results = chain_results + ru_for_chain
-                results.sort(key=lambda x: x[1])
+                print(f"  Через цепочку прошли: {len(chain_results)} из {len(intl_pool)} зарубежных")
+                intl_pool = chain_results  # зарубежные теперь с реальным пингом из РФ
             else:
-                print("  Не удалось запустить ни один российский сервер.")
-                print("  Используем обычные результаты без цепочки.")
-                if FILTER_RUSSIAN:
-                    results = intl_for_chain
-                else:
-                    results = intl_for_chain + ru_for_chain
-                results.sort(key=lambda x: x[1])
+                print("  Не удалось запустить ни один российский сервер — цепочка пропущена.")
         else:
             print("[ЦЕПОЧКА] Российских серверов не найдено — пропускаем.")
 
-    # --- Фильтры (insecure / lock / pbk / sni) ---
-    # FILTER_RUSSIAN при CHAIN_PROXY=on уже отработал выше на этапе цепочки.
-    # При CHAIN_PROXY=off — отрабатывает здесь как обычный фильтр.
-    any_filter = (FILTER_INSECURE or FILTER_LOCK
-                  or (FILTER_RUSSIAN and not CHAIN_PROXY)
-                  or FILTER_INVALID_PBK or FILTER_DEAD_SNI)
-    if any_filter:
-        before = len(results)
-
-        if FILTER_DEAD_SNI:
-            sni_urls = list({entry[0] for entry in results})
-            print(f"  Проверка SNI-сайтов ({len(sni_urls)} уникальных, TLS-хендшейк)...")
-            with concurrent.futures.ThreadPoolExecutor(max_workers=30) as ex:
-                list(ex.map(_check_sni, sni_urls))
-
+    # ----------------------------------------------------------------
+    # Фильтры — применяются ко всем серверам одинаково.
+    # FILTER_RUSSIAN работает корректно при любом значении CHAIN_PROXY:
+    #   on  → РФ-серверы не попадают в финал
+    #   off → РФ-серверы попадают в финал
+    # ----------------------------------------------------------------
+    def _apply_filters(pool: list, pool_is_ru: bool) -> tuple[list, dict]:
         filtered = []
-        cnt_insecure = cnt_lock = cnt_ru = cnt_pbk = cnt_sni = 0
-        for entry in results:
-            url  = entry[0]
-            host, _ = _extract_host_port(url)
+        counts = {'insecure': 0, 'lock': 0, 'ru': 0, 'pbk': 0, 'sni': 0}
+        for entry in pool:
+            url = entry[0]
             sec_level, _, _ = _get_security_level(url)
-            is_ru = _is_russian_server(host or '', url)
 
             if FILTER_INSECURE and sec_level == 'insecure':
-                cnt_insecure += 1; continue
+                counts['insecure'] += 1; continue
             if FILTER_LOCK and sec_level == 'secure':
-                cnt_lock += 1; continue
-            if FILTER_RUSSIAN and not CHAIN_PROXY and is_ru:
-                cnt_ru += 1; continue
+                counts['lock'] += 1; continue
+            if FILTER_RUSSIAN and pool_is_ru:
+                counts['ru'] += 1; continue
             if FILTER_INVALID_PBK and not _check_pbk(url):
-                cnt_pbk += 1; continue
+                counts['pbk'] += 1; continue
             if FILTER_DEAD_SNI and not _check_sni(url):
-                cnt_sni += 1; continue
+                counts['sni'] += 1; continue
             filtered.append(entry)
+        return filtered, counts
 
-        results = filtered
-        print(f"  Фильтры убрали: {before - len(results)} серверов  (осталось {len(results)})")
+    if FILTER_DEAD_SNI:
+        all_for_sni = list({e[0] for e in intl_pool + ru_pool})
+        print(f"  Проверка SNI-сайтов ({len(all_for_sni)} уникальных, TLS-хендшейк)...")
+        with concurrent.futures.ThreadPoolExecutor(max_workers=30) as ex:
+            list(ex.map(_check_sni, all_for_sni))
+
+    intl_filtered, intl_counts = _apply_filters(intl_pool, pool_is_ru=False)
+    ru_filtered,   ru_counts   = _apply_filters(ru_pool,   pool_is_ru=True)
+
+    # Суммируем статистику фильтров
+    total_before  = len(intl_pool) + len(ru_pool)
+    total_after   = len(intl_filtered) + len(ru_filtered)
+    cnt_insecure  = intl_counts['insecure'] + ru_counts['insecure']
+    cnt_lock      = intl_counts['lock']     + ru_counts['lock']
+    cnt_ru        = intl_counts['ru']       + ru_counts['ru']
+    cnt_pbk       = intl_counts['pbk']      + ru_counts['pbk']
+    cnt_sni       = intl_counts['sni']      + ru_counts['sni']
+
+    if total_before != total_after:
+        print(f"  Фильтры убрали: {total_before - total_after} серверов  (осталось {total_after})")
         if cnt_insecure: print(f"    ⚠️  небезопасных убрано : {cnt_insecure}")
         if cnt_lock:     print(f"    🔒 TLS-only убрано     : {cnt_lock}")
         if cnt_ru:       print(f"    🇷🇺 российских убрано  : {cnt_ru}")
         if cnt_pbk:      print(f"    🔑 невалидный pbk      : {cnt_pbk}")
         if cnt_sni:      print(f"    🌐 мёртвый SNI-сайт    : {cnt_sni}")
 
-    # Разделяем финал на зарубежные и российские для HTML-viewer
-    intl_results = []
-    ru_results   = []
-    for entry in results:
-        h, _ = _extract_host_port(entry[0])
-        if _is_russian_server(h or '', entry[0]):
-            ru_results.append(entry)
-        else:
-            intl_results.append(entry)
-    intl_results = intl_results[:TOP_N_EACH]
-    ru_results   = ru_results[:TOP_N_EACH]
+    intl_results = sorted(intl_filtered, key=lambda x: x[1])[:TOP_N_EACH]
+    ru_results   = sorted(ru_filtered,   key=lambda x: x[1])[:TOP_N_EACH]
 
     elapsed_total = int(time.time() - t_start)
     print(f"\n{'─'*60}")
