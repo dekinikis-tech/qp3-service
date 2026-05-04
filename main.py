@@ -21,11 +21,11 @@ GEOIP_DB_PATH = os.environ.get('GEOIP_DB', 'GeoLite2-Country.mmdb')
 on  = True
 off = False
 
-FILTER_INSECURE    = on
-FILTER_LOCK        = on
-FILTER_RUSSIAN     = on
-FILTER_INVALID_PBK = on
-FILTER_DEAD_SNI    = on
+FILTER_INSECURE     = on   # Удаляет серверы без шифрования (защита от перехвата)
+FILTER_LOCK         = on   # Оставляет ТОЛЬКО Reality. Остальное (TLS, Hysteria) удаляется
+FILTER_RUSSIAN      = off   # Полностью исключает серверы, находящиеся в РФ[cite: 1]
+FILTER_INVALID_PBK  = on   # Удаляет конфиги с битыми ключами Reality[cite: 1]
+FILTER_DEAD_SNI     = on   # Удаляет серверы, если их сайт-маскировка не отвечает[cite: 1]
 
 SNI_CHECK_TIMEOUT  = 4.0
 
