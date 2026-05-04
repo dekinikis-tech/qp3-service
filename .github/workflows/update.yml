@@ -53,17 +53,10 @@ jobs:
         run: pip install "requests[socks]" geoip2
 
       - name: Download GeoLite2 database
-        env:
-          MAXMIND_LICENSE_KEY: ${{ secrets.MAXMIND_LICENSE_KEY }}
         run: |
-          if [ -z "$MAXMIND_LICENSE_KEY" ]; then
-            echo "MAXMIND_LICENSE_KEY не задан — GeoIP будет недоступен, используем fallback"
-          else
-            wget -q -O GeoLite2-Country.tar.gz \
-              "https://download.maxmind.com/app/geoip_download?edition_id=GeoLite2-Country&license_key=${MAXMIND_LICENSE_KEY}&suffix=tar.gz"
-            tar -xzf GeoLite2-Country.tar.gz --wildcards --no-anchored '*.mmdb' --strip-components=1
-            echo "GeoLite2-Country.mmdb скачан: $(du -sh GeoLite2-Country.mmdb)"
-          fi
+          wget -q -O GeoLite2-Country.mmdb \
+            "https://github.com/P3TERX/GeoLite.mmdb/raw/download/GeoLite2-Country.mmdb"
+          echo "GeoLite2-Country.mmdb скачан: $(du -sh GeoLite2-Country.mmdb)"
 
       - name: Run checker
         env:
